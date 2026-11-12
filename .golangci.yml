@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  # Also lint the integration tests behind //go:build integration.
+  build-tags:
+    - integration
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
