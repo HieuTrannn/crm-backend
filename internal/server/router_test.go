@@ -24,6 +24,23 @@ func newTestRouter() *gin.Engine {
 	return NewRouter(slog.New(slog.DiscardHandler), fakePinger{})
 }
 
+func TestDocs(t *testing.T) {
+	r := newTestRouter()
+	MountDocs(r, "../../api/openapi.yaml")
+
+	for path, want := range map[string]string{
+		"/docs":              "SwaggerUIBundle",
+		"/docs/openapi.yaml": "openapi: 3.1.0",
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code, path)
+		assert.Contains(t, rec.Body.String(), want, path)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	tests := []struct {
 		name         string

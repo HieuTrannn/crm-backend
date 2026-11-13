@@ -63,9 +63,16 @@ func run() error {
 	}
 	authHandler := auth.NewHandler(authSvc, tokens, cfg.AppEnv == config.EnvProduction)
 
+	router := server.NewRouter(log, pool, authHandler)
+	if cfg.AppEnv == config.EnvDevelopment {
+		// Path is relative to the repo root, where `go run ./cmd/api` is started.
+		server.MountDocs(router, "api/openapi.yaml")
+		log.Info("swagger ui enabled", slog.String("url", "http://localhost:"+cfg.Port+"/docs"))
+	}
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           server.NewRouter(log, pool, authHandler),
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second, // guards against Slowloris
 	}
 
