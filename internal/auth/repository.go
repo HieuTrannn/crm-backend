@@ -8,14 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/HieuTrannn/crm-backend/db/sqlc"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 )
-
-const pgUniqueViolation = "23505"
 
 // PostgresRepository implements Repository on top of sqlc.
 type PostgresRepository struct {
@@ -131,13 +128,9 @@ func (s *tenantStore) RevokeFamily(ctx context.Context, familyID uuid.UUID) erro
 	return nil
 }
 
-// mapUniqueViolation turns a unique violation on constraint into target.
+// mapUniqueViolation turns a violation of the named unique constraint into target.
 func mapUniqueViolation(err error, constraint string, target error) error {
-	if err == nil {
-		return nil
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == constraint {
+	if database.ViolatesConstraint(err, constraint) {
 		return target
 	}
 	return err

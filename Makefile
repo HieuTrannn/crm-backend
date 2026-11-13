@@ -6,11 +6,13 @@ export
 run:
 	go run ./cmd/api
 
+# Unit tests only: files tagged //go:build integration are skipped, so no Docker needed.
 test:
 	go test -race ./...
 
+# Full suite: unit + integration tests (testcontainers starts postgres:17, needs Docker).
 test-integration:
-	go test -race -tags=integration ./test/integration/...
+	go test -race -tags=integration ./...
 
 lint:
 	golangci-lint run

@@ -17,6 +17,7 @@ import (
 type fakeRepo struct {
 	users         map[string]Credentials // by lower-case email
 	tokens        map[string]*fakeToken  // by token hash
+	slugs         map[string]bool
 	createUserErr error
 }
 
@@ -26,7 +27,7 @@ type fakeToken struct {
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{users: map[string]Credentials{}, tokens: map[string]*fakeToken{}}
+	return &fakeRepo{users: map[string]Credentials{}, tokens: map[string]*fakeToken{}, slugs: map[string]bool{}}
 }
 
 func (f *fakeRepo) WithTenant(_ context.Context, tenantID uuid.UUID, fn func(TenantStore) error) error {
@@ -46,7 +47,13 @@ type fakeStore struct {
 	tenantID uuid.UUID
 }
 
-func (s *fakeStore) CreateTenant(context.Context, TenantInfo) error { return nil }
+func (s *fakeStore) CreateTenant(_ context.Context, t TenantInfo) error {
+	if s.repo.slugs[t.Slug] {
+		return ErrSlugTaken
+	}
+	s.repo.slugs[t.Slug] = true
+	return nil
+}
 
 func (s *fakeStore) CreateUser(_ context.Context, u NewUser) error {
 	if s.repo.createUserErr != nil {
@@ -119,7 +126,7 @@ func newTestService(t *testing.T) (*Service, *fakeRepo) {
 func registerOwner(t *testing.T, svc *Service) Me {
 	t.Helper()
 	me, err := svc.Register(t.Context(), RegisterInput{
-		CompanyName: "Acme", Slug: "acme", Email: "alice@acme.test", Password: "s3cret-pass", FullName: "Alice",
+		CompanyName: "Acme", Email: "alice@acme.test", Password: "s3cret-pass", FullName: "Alice",
 	})
 	require.NoError(t, err)
 	return me
@@ -136,6 +143,19 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, me.Tenant.ID, stored.TenantID)
 	assert.NotEqual(t, "s3cret-pass", stored.PasswordHash)
 	assert.True(t, VerifyPassword(stored.PasswordHash, "s3cret-pass"))
+}
+
+func TestRegister_SameCompanyNameGetsSuffixedSlug(t *testing.T) {
+	svc, _ := newTestService(t)
+	first := registerOwner(t, svc)
+
+	second, err := svc.Register(t.Context(), RegisterInput{
+		CompanyName: "ACME", Email: "bob@acme.test", Password: "s3cret-pass", FullName: "Bob",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "acme", first.Tenant.Slug)
+	assert.Regexp(t, `^acme-[a-z2-7]{6}$`, second.Tenant.Slug)
 }
 
 func TestRegister_EmailTaken(t *testing.T) {

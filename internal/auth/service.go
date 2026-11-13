@@ -30,6 +30,9 @@ type TenantStore interface {
 	RevokeFamily(ctx context.Context, familyID uuid.UUID) error
 }
 
+// maxSlugAttempts bounds retries when the tenant slug derived from the company name is taken.
+const maxSlugAttempts = 5
+
 // Service implements the auth use cases.
 type Service struct {
 	repo       Repository
@@ -69,15 +72,24 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (Me, error) {
 		return Me{}, fmt.Errorf("new user id: %w", err)
 	}
 
-	tenant := TenantInfo{ID: tenantID, Name: in.CompanyName, Slug: in.Slug}
+	base := slugify(in.CompanyName)
+	tenant := TenantInfo{ID: tenantID, Name: in.CompanyName, Slug: base}
 	user := NewUser{ID: userID, TenantID: tenantID, Email: in.Email, PasswordHash: hash,
 		FullName: in.FullName, Role: RoleOwner}
-	err = s.repo.WithTenant(ctx, tenantID, func(st TenantStore) error {
-		if err := st.CreateTenant(ctx, tenant); err != nil {
-			return err
+	// Insert and retry on conflict rather than check-then-insert: two sign-ups
+	// racing for the same company name both succeed, the later one with a suffix.
+	for attempt := 1; ; attempt++ {
+		err = s.repo.WithTenant(ctx, tenantID, func(st TenantStore) error {
+			if err := st.CreateTenant(ctx, tenant); err != nil {
+				return err
+			}
+			return st.CreateUser(ctx, user)
+		})
+		if !errors.Is(err, ErrSlugTaken) || attempt == maxSlugAttempts {
+			break
 		}
-		return st.CreateUser(ctx, user)
-	})
+		tenant.Slug = withRandomSuffix(base)
+	}
 	if err != nil {
 		return Me{}, fmt.Errorf("register: %w", err)
 	}

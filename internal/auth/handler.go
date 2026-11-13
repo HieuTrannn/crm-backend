@@ -2,7 +2,6 @@ package auth
 
 import (
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +17,6 @@ const (
 	accessCookiePath  = "/api"
 	refreshCookiePath = "/api/v1/auth"
 )
-
-var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Handler exposes the auth endpoints.
 type Handler struct {
@@ -49,7 +46,6 @@ func (h *Handler) ErrorRules() []httpx.ErrorRule { return ErrorRules() }
 
 type registerRequest struct {
 	CompanyName string `json:"company_name" binding:"required,max=200"`
-	Slug        string `json:"slug" binding:"required,min=3,max=50"`
 	Email       string `json:"email" binding:"required,email,max=254"`
 	Password    string `json:"password" binding:"required,min=8"`
 	FullName    string `json:"full_name" binding:"required,max=200"`
@@ -58,11 +54,6 @@ type registerRequest struct {
 func (h *Handler) register(c *gin.Context) {
 	var req registerRequest
 	if !httpx.BindJSON(c, &req) {
-		return
-	}
-	if !slugPattern.MatchString(req.Slug) {
-		httpx.WriteErrorDetails(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body",
-			map[string]string{"slug": "lowercase letters, digits and single hyphens"})
 		return
 	}
 	me, err := h.svc.Register(c.Request.Context(), RegisterInput(req))

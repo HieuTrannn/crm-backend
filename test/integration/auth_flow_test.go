@@ -20,10 +20,13 @@ import (
 	"github.com/HieuTrannn/crm-backend/internal/server"
 )
 
+// testJWTSecret signs access tokens in integration tests.
+const testJWTSecret = "integration-secret-at-least-32-bytes!"
+
 func newAuthRouter(t *testing.T, e env) http.Handler {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	tokens := auth.NewTokenIssuer("integration-secret-at-least-32-bytes!")
+	tokens := auth.NewTokenIssuer(testJWTSecret)
 	svc, err := auth.NewService(auth.NewPostgresRepository(e.db, e.app), tokens,
 		auth.NewMemoryLimiter(5, 3*time.Minute), auth.BcryptCost)
 	require.NoError(t, err)
@@ -68,16 +71,15 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 
 type registerBody struct {
 	CompanyName string `json:"company_name"`
-	Slug        string `json:"slug"`
 	Email       string `json:"email"`
 	Password    string `json:"password"`
 	FullName    string `json:"full_name"`
 }
 
-func register(t *testing.T, h http.Handler, slug, email string) auth.Me {
+func register(t *testing.T, h http.Handler, company, email string) auth.Me {
 	t.Helper()
 	rec := call(t, h, http.MethodPost, "/api/v1/auth/register",
-		registerBody{CompanyName: slug + " Inc", Slug: slug, Email: email, Password: "s3cret-pass", FullName: "Owner"})
+		registerBody{CompanyName: company, Email: email, Password: "s3cret-pass", FullName: "Owner"})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.Empty(t, rec.Result().Cookies(), "register does not log in")
 	var me auth.Me
@@ -95,27 +97,33 @@ func login(t *testing.T, h http.Handler, email string) (access, refresh *http.Co
 func TestAuthFlow(t *testing.T) {
 	h := newAuthRouter(t, setup(t))
 
-	acme := register(t, h, "acme", "alice@acme.test")
+	acme := register(t, h, "Acme", "alice@acme.test")
 	assert.Equal(t, "owner", acme.Role)
+	assert.Equal(t, "acme", acme.Tenant.Slug)
 
-	t.Run("duplicate email or slug is 409 and creates nothing", func(t *testing.T) {
+	t.Run("slug comes from the company name, with a suffix when taken", func(t *testing.T) {
+		vn := register(t, h, "Công ty TNHH Đại Phát", "owner@daiphat.test")
+		assert.Equal(t, "cong-ty-tnhh-dai-phat", vn.Tenant.Slug)
+		assert.Equal(t, "Công ty TNHH Đại Phát", vn.Tenant.Name)
+
+		again := register(t, h, "ACME", "second@acme.test")
+		assert.Regexp(t, `^acme-[a-z2-7]{6}$`, again.Tenant.Slug)
+	})
+
+	t.Run("duplicate email is 409 and creates nothing", func(t *testing.T) {
 		rec := call(t, h, http.MethodPost, "/api/v1/auth/register",
-			registerBody{CompanyName: "X", Slug: "fresh-slug", Email: "ALICE@acme.test", Password: "s3cret-pass", FullName: "X"})
+			registerBody{CompanyName: "Fresh Co", Email: "ALICE@acme.test", Password: "s3cret-pass", FullName: "X"})
 		require.Equal(t, http.StatusConflict, rec.Code)
 		assert.Equal(t, "EMAIL_TAKEN", errorCode(t, rec))
 
-		rec = call(t, h, http.MethodPost, "/api/v1/auth/register",
-			registerBody{CompanyName: "X", Slug: "acme", Email: "new@x.test", Password: "s3cret-pass", FullName: "X"})
-		require.Equal(t, http.StatusConflict, rec.Code)
-		assert.Equal(t, "SLUG_TAKEN", errorCode(t, rec))
-
-		// The failed attempt's tenant "fresh-slug" was rolled back with its user, so the slug is free.
-		register(t, h, "fresh-slug", "someone@fresh.test")
+		// The failed attempt's tenant was rolled back with its user, so the plain slug is still free.
+		fresh := register(t, h, "Fresh Co", "someone@fresh.test")
+		assert.Equal(t, "fresh-co", fresh.Tenant.Slug)
 	})
 
 	t.Run("invalid input is 400 with field details", func(t *testing.T) {
 		rec := call(t, h, http.MethodPost, "/api/v1/auth/register",
-			registerBody{CompanyName: "X", Slug: "Bad Slug", Email: "not-an-email", Password: "short", FullName: "X"})
+			registerBody{CompanyName: "X", Email: "not-an-email", Password: "short", FullName: "X"})
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.Contains(t, rec.Body.String(), `"email":"email"`)
 		assert.Contains(t, rec.Body.String(), `"password":"min"`)
@@ -162,7 +170,7 @@ func TestAuthFlow(t *testing.T) {
 	})
 
 	t.Run("refresh token cannot be used under another tenant", func(t *testing.T) {
-		beta := register(t, h, "beta", "bob@beta.test")
+		beta := register(t, h, "Beta", "bob@beta.test")
 		_, refresh := login(t, h, "bob@beta.test")
 		_, raw, ok := strings.Cut(refresh.Value, ".")
 		require.True(t, ok)

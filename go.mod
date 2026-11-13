@@ -14,6 +14,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 	golang.org/x/crypto v0.59.0
+	golang.org/x/text v0.44.0
 )
 
 require (
@@ -94,6 +95,5 @@ require (
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
-	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )

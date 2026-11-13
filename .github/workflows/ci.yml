@@ -22,10 +22,22 @@ jobs:
           version: latest
 
   test:
+    name: unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go test -race ./...
+      - run: make test
+
+  integration:
+    name: integration tests
+    # ubuntu-latest ships Docker, which testcontainers uses to start postgres:17.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make test-integration

@@ -119,7 +119,7 @@ curl localhost:8080/readyz    # {"status":"ok"}  database is reachable (503 othe
 | --- | --- |
 | `make run` | Start the API |
 | `make test` | Unit tests with `-race` (needs cgo; CI runs it on Linux) |
-| `make test-integration` | Integration tests in a PostgreSQL 17 container (needs Docker) |
+| `make test-integration` | Full suite: unit + integration tests in a PostgreSQL 17 container (needs Docker) |
 | `make lint` | golangci-lint |
 | `make migrate-up` / `make migrate-down` | Apply all / roll back one migration |
 | `make sqlc` | Generate Go code from `db/queries` (runs sqlc in Docker) |

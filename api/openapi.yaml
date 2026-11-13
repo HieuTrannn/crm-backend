@@ -11,6 +11,8 @@ tags:
     description: Health checks (outside /api/v1)
   - name: Auth
     description: Registration, login, session cookies and the current user
+  - name: Contacts
+    description: Customers of the tenant (FR-CON-01..04)
 paths:
   /healthz:
     get:
@@ -45,7 +47,10 @@ paths:
     post:
       tags: [Auth]
       summary: Create a tenant and its owner in one transaction (FR-AUTH-01)
-      description: Does not log in; call /auth/login afterwards.
+      description: |
+        Does not log in; call /auth/login afterwards. The tenant slug is derived
+        from company_name ("Công ty Đại Phát" -> "cong-ty-dai-phat"); when it is
+        taken, a random 6-character suffix is appended ("cong-ty-dai-phat-k3x9qa").
       requestBody:
         required: true
         content:
@@ -62,7 +67,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "409":
-          description: EMAIL_TAKEN or SLUG_TAKEN
+          description: EMAIL_TAKEN
           content:
             application/json:
               schema:
@@ -148,6 +153,135 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/contacts:
+    get:
+      tags: [Contacts]
+      summary: List contacts, newest first, with cursor pagination and search (FR-CON-02/03)
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: q
+          in: query
+          description: Case- and accent-insensitive substring of name, email or phone ("nguyen" finds "Nguyễn")
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactPage"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    post:
+      tags: [Contacts]
+      summary: Create a contact (FR-CON-01)
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          description: EMAIL_TAKEN (another live contact of this tenant has the email)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/InvalidOwner"
+
+  /api/v1/contacts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Contacts]
+      summary: Get a contact (FR-CON-04)
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Contacts]
+      summary: Partially update a contact (FR-CON-04)
+      description: Absent fields are unchanged; an empty string clears email, phone, company or notes.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: EMAIL_TAKEN
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/InvalidOwner"
+    delete:
+      tags: [Contacts]
+      summary: Soft-delete a contact (FR-CON-04)
+      security:
+        - cookieAuth: []
+      responses:
+        "204":
+          description: Deleted (hidden from lists; its email can be reused)
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: CONTACT_HAS_OPEN_DEALS
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -155,9 +289,39 @@ components:
       in: cookie
       name: access_token
 
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque next_cursor from the previous page; omit for the first page
+      schema: { type: string }
+
   responses:
     ValidationError:
       description: VALIDATION_ERROR; details maps each invalid field to the failed rule
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Unauthenticated:
+      description: UNAUTHENTICATED (missing or invalid access token)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: NOT_FOUND (also for another tenant's id, NFR-ISO-04)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidOwner:
+      description: INVALID_OWNER (owner_id is not a user of this tenant)
       content:
         application/json:
           schema:
@@ -187,14 +351,9 @@ components:
 
     RegisterRequest:
       type: object
-      required: [company_name, slug, email, password, full_name]
+      required: [company_name, email, password, full_name]
       properties:
         company_name: { type: string, maxLength: 200 }
-        slug:
-          type: string
-          minLength: 3
-          maxLength: 50
-          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
         email: { type: string, format: email, maxLength: 254 }
         password:
           type: string
@@ -216,4 +375,59 @@ components:
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
-            slug: { type: string }
+            slug:
+              type: string
+              maxLength: 50
+              pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+              description: Generated from the company name
+
+    Contact:
+      type: object
+      required: [id, full_name, email, phone, company, notes, owner_id, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string }
+        email: { type: [string, "null"], format: email }
+        phone: { type: [string, "null"] }
+        company: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        owner_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ContactCreate:
+      type: object
+      required: [full_name]
+      properties:
+        full_name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 254 }
+        phone: { type: string, maxLength: 20 }
+        company: { type: string, maxLength: 200 }
+        notes: { type: string, maxLength: 5000 }
+        owner_id:
+          type: string
+          format: uuid
+          description: A user of the same tenant; defaults to the caller
+
+    ContactUpdate:
+      type: object
+      description: Absent fields are unchanged; an empty string clears email, phone, company or notes.
+      properties:
+        full_name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, maxLength: 254, description: A valid email, or empty to clear }
+        phone: { type: string, maxLength: 20 }
+        company: { type: string, maxLength: 200 }
+        notes: { type: string, maxLength: 5000 }
+        owner_id: { type: string, format: uuid }
+
+    ContactPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as ?cursor= to get the next page; null on the last page

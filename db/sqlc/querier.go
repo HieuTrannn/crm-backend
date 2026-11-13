@@ -9,15 +9,28 @@ import (
 )
 
 type Querier interface {
+	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
+	CreateContact(ctx context.Context, arg CreateContactParams) (Contact, error)
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) error
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
 	CreateTenant(ctx context.Context, arg CreateTenantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) error
+	GetContact(ctx context.Context, arg GetContactParams) (Contact, error)
+	// Locks the row for a read-modify-write update in the same transaction.
+	GetContactForUpdate(ctx context.Context, arg GetContactForUpdateParams) (Contact, error)
 	GetRefreshTokenByHash(ctx context.Context, arg GetRefreshTokenByHashParams) (GetRefreshTokenByHashRow, error)
 	GetUserWithTenant(ctx context.Context, arg GetUserWithTenantParams) (GetUserWithTenantRow, error)
+	// Keyset pagination: rows strictly after the cursor (created_at, id), newest first.
+	// The first page passes a cursor beyond any real row. Uses contacts_tenant_created_idx.
+	ListContacts(ctx context.Context, arg ListContactsParams) ([]Contact, error)
 	// Revokes one token only if it is still active; 0 rows means someone already used it.
 	RevokeRefreshToken(ctx context.Context, arg RevokeRefreshTokenParams) (int64, error)
 	RevokeRefreshTokenFamily(ctx context.Context, arg RevokeRefreshTokenFamilyParams) error
+	// Same as ListContacts plus a substring match on search_text (already lower-cased and
+	// unaccented). query must be LIKE-escaped by the caller; SQL normalizes it the same way.
+	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]Contact, error)
+	SoftDeleteContact(ctx context.Context, arg SoftDeleteContactParams) (int64, error)
+	UpdateContact(ctx context.Context, arg UpdateContactParams) (Contact, error)
 }
 
 var _ Querier = (*Queries)(nil)
