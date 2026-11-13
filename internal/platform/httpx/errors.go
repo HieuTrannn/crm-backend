@@ -43,6 +43,12 @@ type ErrorRule struct {
 	Message string
 }
 
+// Detailer is implemented by errors that carry data for the response's
+// "details" field, e.g. the latest version of a record on VERSION_CONFLICT.
+type Detailer interface {
+	ErrorDetails() any
+}
+
 // Errors turns the last error a handler attached with c.Error into the
 // standard error JSON. Unknown errors become a logged 500 that reveals nothing.
 func Errors(log *slog.Logger, rules ...ErrorRule) gin.HandlerFunc {
@@ -54,7 +60,12 @@ func Errors(log *slog.Logger, rules ...ErrorRule) gin.HandlerFunc {
 		err := c.Errors.Last().Err
 		for _, r := range rules {
 			if errors.Is(err, r.Err) {
-				WriteError(c, r.Status, r.Code, r.Message)
+				var details any
+				var d Detailer
+				if errors.As(err, &d) {
+					details = d.ErrorDetails()
+				}
+				WriteErrorDetails(c, r.Status, r.Code, r.Message, details)
 				return
 			}
 		}
