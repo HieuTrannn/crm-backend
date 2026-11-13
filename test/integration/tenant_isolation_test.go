@@ -5,10 +5,13 @@ package integration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +24,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 )
 
@@ -162,72 +166,87 @@ func requireSQLState(t *testing.T, err error, code string) {
 	assert.Equal(t, code, pgErr.Code, pgErr.Message)
 }
 
+// execer is what both a pool and a transaction offer for running a statement.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// TestTenantIsolation proves NFR-ISO-01..04 at the database level. Each row runs one
+// statement as app_user (inside A's WithTenantTx, or outside any tenant) or as the
+// table owner, and checks the rows returned/affected or the SQLSTATE raised.
 func TestTenantIsolation(t *testing.T) {
 	e := setup(t)
 	s := seed(t, e)
 	ctx := t.Context()
+	newID := func() uuid.UUID { return uuid.Must(uuid.NewV7()) }
+	tenantA := &s.tenantA
 
-	t.Run("query without tenant filter sees only own tenant", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			assert.Equal(t, 1, count(t, tx, "users"))
-			assert.Equal(t, 1, count(t, tx, "refresh_tokens"))
-			return nil
+	tests := []struct {
+		nfr      string
+		name     string
+		tenant   *uuid.UUID // nil: run outside WithTenantTx
+		asOwner  bool       // run as the table owner instead of app_user
+		sql      string
+		args     []any
+		wantRows int64  // rows returned (SELECT) or affected (UPDATE)
+		wantCode string // expected SQLSTATE; empty means the statement succeeds
+	}{
+		{nfr: "NFR-ISO-02", name: "users without WHERE tenant_id returns only A's row",
+			tenant: tenantA, sql: "SELECT id FROM users", wantRows: 1},
+		{nfr: "NFR-ISO-02", name: "the row returned is A's own user",
+			tenant: tenantA, sql: "SELECT id FROM users WHERE id = $1", args: []any{s.userA}, wantRows: 1},
+		{nfr: "NFR-ISO-02", name: "refresh_tokens without WHERE tenant_id returns only A's row",
+			tenant: tenantA, sql: "SELECT id FROM refresh_tokens", wantRows: 1},
+		// The app pool has a single connection that the rows above just used with tenant A,
+		// so these also prove set_config(..., true) does not leak to the next use.
+		{nfr: "NFR-ISO-02", name: "users outside WithTenantTx returns nothing (fail closed)",
+			sql: "SELECT id FROM users", wantRows: 0},
+		{nfr: "NFR-ISO-02", name: "refresh_tokens outside WithTenantTx returns nothing (fail closed)",
+			sql: "SELECT id FROM refresh_tokens", wantRows: 0},
+		{nfr: "NFR-ISO-04", name: "B's user by id is not found from A",
+			tenant: tenantA, sql: "SELECT id FROM users WHERE id = $1", args: []any{s.userB}, wantRows: 0},
+		{nfr: "NFR-ISO-01", name: "updating B's user from A affects nothing",
+			tenant: tenantA, sql: "UPDATE users SET full_name = 'hacked' WHERE id = $1", args: []any{s.userB}, wantRows: 0},
+		{nfr: "NFR-ISO-01", name: "INSERT with B's tenant_id is rejected by WITH CHECK",
+			tenant: tenantA, wantCode: "42501",
+			sql: `INSERT INTO users (id, tenant_id, email, password_hash, full_name, role)
+				VALUES ($1, $2, 'mallory@beta.test', 'h', 'M', 'member')`, args: []any{newID(), s.tenantB}},
+		{nfr: "NFR-ISO-01", name: "refresh token cannot reference B's user (composite FK)",
+			tenant: tenantA, wantCode: "23503",
+			sql: `INSERT INTO refresh_tokens (id, user_id, tenant_id, token_hash, family_id, expires_at)
+				VALUES ($1, $2, $3, 'cross', $1, now())`, args: []any{newID(), s.userB, s.tenantA}},
+		{nfr: "NFR-ISO-03", name: "app_user has no DELETE privilege",
+			tenant: tenantA, sql: "DELETE FROM users", wantCode: "42501"},
+		{nfr: "NFR-ISO-03", name: "FORCE applies RLS to the table owner too",
+			asOwner: true, sql: "SELECT id FROM users", wantRows: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.nfr+"/"+tt.name, func(t *testing.T) {
+			var tag pgconn.CommandTag
+			run := func(q execer) error {
+				var err error
+				tag, err = q.Exec(ctx, tt.sql, tt.args...)
+				return err
+			}
+
+			var err error
+			switch {
+			case tt.asOwner:
+				err = run(e.migrator)
+			case tt.tenant == nil:
+				err = run(e.app)
+			default:
+				err = e.db.WithTenantTx(ctx, *tt.tenant, func(tx pgx.Tx) error { return run(tx) })
+			}
+
+			if tt.wantCode != "" {
+				requireSQLState(t, err, tt.wantCode)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRows, tag.RowsAffected())
 		})
-		require.NoError(t, err)
-	})
-
-	t.Run("no tenant set sees nothing and tenant does not leak to next use of the connection", func(t *testing.T) {
-		// The pool has one connection, which the previous subtest used with tenant A.
-		assert.Equal(t, 0, count(t, e.app, "users"))
-		assert.Equal(t, 0, count(t, e.app, "refresh_tokens"))
-	})
-
-	t.Run("other tenant's row by id is not found", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			var id uuid.UUID
-			return tx.QueryRow(ctx, "SELECT id FROM users WHERE id = $1", s.userB).Scan(&id)
-		})
-		assert.ErrorIs(t, err, pgx.ErrNoRows)
-	})
-
-	t.Run("cannot update other tenant's row", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			tag, err := tx.Exec(ctx, "UPDATE users SET full_name = 'hacked' WHERE id = $1", s.userB)
-			assert.Zero(t, tag.RowsAffected())
-			return err
-		})
-		require.NoError(t, err)
-	})
-
-	t.Run("cannot insert a row for another tenant", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO users (id, tenant_id, email, password_hash, full_name, role)
-				VALUES ($1, $2, 'mallory@beta.test', 'h', 'M', 'member')`, uuid.Must(uuid.NewV7()), s.tenantB)
-			return err
-		})
-		requireSQLState(t, err, "42501") // RLS WITH CHECK violation
-	})
-
-	t.Run("refresh token cannot point at another tenant's user", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO refresh_tokens (id, user_id, tenant_id, token_hash, family_id, expires_at)
-				VALUES ($1, $2, $3, 'cross', $1, now())`, uuid.Must(uuid.NewV7()), s.userB, s.tenantA)
-			return err
-		})
-		requireSQLState(t, err, "23503") // composite FK violation
-	})
-
-	t.Run("app_user has no DELETE privilege", func(t *testing.T) {
-		err := e.db.WithTenantTx(ctx, s.tenantA, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, "DELETE FROM users")
-			return err
-		})
-		requireSQLState(t, err, "42501")
-	})
-
-	t.Run("FORCE applies RLS to the table owner too", func(t *testing.T) {
-		assert.Equal(t, 0, count(t, e.migrator, "users"))
-	})
+	}
 
 	t.Run("login lookup finds user across tenants without a tenant set", func(t *testing.T) {
 		var id, tenantID uuid.UUID
@@ -267,4 +286,51 @@ func TestTenantIsolation(t *testing.T) {
 		})
 		require.NoError(t, err)
 	})
+}
+
+// TestTenantIsolationAPI proves NFR-ISO-01/04 through HTTP. Even an access token
+// whose claims pair a user with the wrong tenant (forged, or a bug upstream)
+// cannot read that user: the answer is 404, never another tenant's data or a 403.
+func TestTenantIsolationAPI(t *testing.T) {
+	e := setup(t)
+	s := seed(t, e)
+	h := newAuthRouter(t, e)
+	tokens := auth.NewTokenIssuer(testJWTSecret)
+	accessCookie := func(user, tenant uuid.UUID) *http.Cookie {
+		tok, _, err := tokens.Issue(auth.Principal{UserID: user, TenantID: tenant, Role: auth.RoleOwner}, time.Now())
+		require.NoError(t, err)
+		return &http.Cookie{Name: "access_token", Value: tok}
+	}
+
+	tests := []struct {
+		nfr        string
+		name       string
+		cookie     *http.Cookie
+		wantStatus int
+		wantUser   uuid.UUID
+		wantTenant uuid.UUID
+	}{
+		{nfr: "NFR-ISO-01", name: "A reads its own user",
+			cookie: accessCookie(s.userA, s.tenantA), wantStatus: http.StatusOK, wantUser: s.userA, wantTenant: s.tenantA},
+		{nfr: "NFR-ISO-04", name: "B's user under A's tenant is 404",
+			cookie: accessCookie(s.userB, s.tenantA), wantStatus: http.StatusNotFound},
+		{nfr: "NFR-ISO-04", name: "A's user under B's tenant is 404",
+			cookie: accessCookie(s.userA, s.tenantB), wantStatus: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.nfr+"/"+tt.name, func(t *testing.T) {
+			rec := call(t, h, http.MethodGet, "/api/v1/me", nil, tt.cookie)
+
+			require.Equal(t, tt.wantStatus, rec.Code, rec.Body.String())
+			if tt.wantStatus != http.StatusOK {
+				assert.Equal(t, "NOT_FOUND", errorCode(t, rec))
+				assert.NotContains(t, rec.Body.String(), "bob@beta.test")
+				return
+			}
+			var me auth.Me
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &me))
+			assert.Equal(t, tt.wantUser, me.ID)
+			assert.Equal(t, tt.wantTenant, me.Tenant.ID)
+		})
+	}
 }
