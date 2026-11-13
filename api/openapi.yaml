@@ -45,7 +45,10 @@ paths:
     post:
       tags: [Auth]
       summary: Create a tenant and its owner in one transaction (FR-AUTH-01)
-      description: Does not log in; call /auth/login afterwards.
+      description: |
+        Does not log in; call /auth/login afterwards. The tenant slug is derived
+        from company_name ("Công ty Đại Phát" -> "cong-ty-dai-phat"); when it is
+        taken, a random 6-character suffix is appended ("cong-ty-dai-phat-k3x9qa").
       requestBody:
         required: true
         content:
@@ -62,7 +65,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "409":
-          description: EMAIL_TAKEN or SLUG_TAKEN
+          description: EMAIL_TAKEN
           content:
             application/json:
               schema:
@@ -187,14 +190,9 @@ components:
 
     RegisterRequest:
       type: object
-      required: [company_name, slug, email, password, full_name]
+      required: [company_name, email, password, full_name]
       properties:
         company_name: { type: string, maxLength: 200 }
-        slug:
-          type: string
-          minLength: 3
-          maxLength: 50
-          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
         email: { type: string, format: email, maxLength: 254 }
         password:
           type: string
@@ -216,4 +214,8 @@ components:
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
-            slug: { type: string }
+            slug:
+              type: string
+              maxLength: 50
+              pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+              description: Generated from the company name

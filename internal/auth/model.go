@@ -21,10 +21,10 @@ type Principal struct {
 	Role     string
 }
 
-// RegisterInput is what a new tenant owner submits.
+// RegisterInput is what a new tenant owner submits. The tenant slug is derived
+// from CompanyName.
 type RegisterInput struct {
 	CompanyName string
-	Slug        string
 	Email       string
 	Password    string
 	FullName    string
