@@ -55,7 +55,7 @@ type updateRequest struct {
 }
 
 func (h *Handler) create(c *gin.Context) {
-	p, ok := principal(c)
+	p, ok := auth.CurrentPrincipal(c)
 	if !ok {
 		return
 	}
@@ -114,7 +114,7 @@ func (h *Handler) delete(c *gin.Context) {
 }
 
 func (h *Handler) list(c *gin.Context) {
-	p, ok := principal(c)
+	p, ok := auth.CurrentPrincipal(c)
 	if !ok {
 		return
 	}
@@ -134,18 +134,10 @@ func (h *Handler) list(c *gin.Context) {
 	}))
 }
 
-func principal(c *gin.Context) (auth.Principal, bool) {
-	p, ok := auth.PrincipalFrom(c.Request.Context())
-	if !ok {
-		httpx.WriteError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "authentication required")
-	}
-	return p, ok
-}
-
 // principalAndID also parses :id. A malformed id is reported as 404, like any
 // id that does not exist in the caller's tenant.
 func principalAndID(c *gin.Context) (auth.Principal, uuid.UUID, bool) {
-	p, ok := principal(c)
+	p, ok := auth.CurrentPrincipal(c)
 	if !ok {
 		return auth.Principal{}, uuid.Nil, false
 	}
