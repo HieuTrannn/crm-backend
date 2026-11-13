@@ -50,3 +50,11 @@ WHERE tenant_id = sqlc.arg(tenant_id)
   AND (created_at, id) < (sqlc.arg(after_created_at)::timestamptz, sqlc.arg(after_id)::uuid)
 ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(row_limit);
+
+-- Open = not won and not lost. Runs in the soft-delete transaction after the
+-- contact row is locked FOR UPDATE (FR-CON-04).
+-- name: ContactHasOpenDeals :one
+SELECT EXISTS (
+    SELECT 1 FROM deals
+    WHERE tenant_id = $1 AND contact_id = $2 AND stage NOT IN ('won', 'lost') AND deleted_at IS NULL
+);

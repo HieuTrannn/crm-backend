@@ -13,6 +13,8 @@ tags:
     description: Registration, login, session cookies and the current user
   - name: Contacts
     description: Customers of the tenant (FR-CON-01..04)
+  - name: Deals
+    description: Sales pipeline (FR-DEAL-01..05)
 paths:
   /healthz:
     get:
@@ -282,6 +284,218 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/deals:
+    get:
+      tags: [Deals]
+      summary: List deals, newest first, with filters and cursor pagination (FR-DEAL-05)
+      description: For a Kanban board, call once per stage with ?stage=.
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: stage
+          in: query
+          schema: { $ref: "#/components/schemas/Stage" }
+        - name: owner_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: contact_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DealPage"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    post:
+      tags: [Deals]
+      summary: Create a deal in stage lead (FR-DEAL-01)
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DealCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: INVALID_CONTACT (missing, deleted or another tenant's contact) or INVALID_OWNER
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/deals/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Deals]
+      summary: Get a deal
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Deals]
+      summary: Partially update a deal with optimistic locking (FR-DEAL-04)
+      description: Send the version you last read. Absent fields are unchanged.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DealUpdate"
+      responses:
+        "200":
+          description: Updated; version is incremented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/VersionConflict"
+        "422":
+          $ref: "#/components/responses/InvalidOwner"
+
+    delete:
+      tags: [Deals]
+      summary: Soft-delete a deal with optimistic locking (FR-DEAL-06)
+      description: |
+        For deals created by mistake or duplicated. The deal disappears from every
+        endpoint and no longer counts as an open deal of its contact; its stage
+        history is kept in the database.
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: version
+          in: query
+          required: true
+          description: The version you last read
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/VersionConflict"
+
+  /api/v1/deals/{id}/transition:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Deals]
+      summary: Move a deal to another stage (FR-DEAL-02/03/04)
+      description: |
+        Allowed: lead -> qualified | lost; qualified -> proposal | lead | lost;
+        proposal -> won | lost | qualified; lost -> lead. won is final.
+        Moving to lost needs lost_reason; reopening a lost deal needs reopen_reason.
+        Every change is recorded in the stage history in the same transaction.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DealTransition"
+      responses:
+        "200":
+          description: Moved; version is incremented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deal"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/VersionConflict"
+        "422":
+          description: INVALID_TRANSITION or REASON_REQUIRED
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/deals/{id}/history:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Deals]
+      summary: Stage history of a deal, oldest first (FR-DEAL-03)
+      description: Not paginated; a deal gains one entry per stage change. The first entry (from_stage null) is the creation.
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HistoryEntry"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -326,6 +540,21 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+
+    VersionConflict:
+      description: VERSION_CONFLICT; error.details holds the latest deal, to merge and retry
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      details:
+                        $ref: "#/components/schemas/Deal"
 
   schemas:
     Status:
@@ -431,3 +660,82 @@ components:
         next_cursor:
           type: [string, "null"]
           description: Pass as ?cursor= to get the next page; null on the last page
+
+    Stage:
+      type: string
+      enum: [lead, qualified, proposal, won, lost]
+
+    Deal:
+      type: object
+      required: [id, contact_id, title, amount, stage, expected_close_date, owner_id, lost_reason, version, closed_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid }
+        title: { type: string }
+        amount: { type: integer, format: int64, minimum: 0, description: Whole VND }
+        stage: { $ref: "#/components/schemas/Stage" }
+        expected_close_date: { type: [string, "null"], format: date }
+        owner_id: { type: string, format: uuid }
+        lost_reason: { type: [string, "null"], description: Set only while the stage is lost }
+        version: { type: integer, minimum: 1, description: Send it back on PATCH and transition }
+        closed_at: { type: [string, "null"], format: date-time, description: Set while won or lost }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DealCreate:
+      type: object
+      required: [contact_id, title, amount]
+      properties:
+        contact_id: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        amount: { type: integer, format: int64, minimum: 0, description: Whole VND; negative or fractional is 400 }
+        expected_close_date: { type: string, format: date, example: "2026-12-31" }
+        owner_id:
+          type: string
+          format: uuid
+          description: A user of the same tenant; defaults to the caller
+
+    DealUpdate:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer, minimum: 1 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        amount: { type: integer, format: int64, minimum: 0 }
+        expected_close_date: { type: string, format: date }
+        owner_id: { type: string, format: uuid }
+
+    DealTransition:
+      type: object
+      required: [to_stage, version]
+      properties:
+        to_stage: { $ref: "#/components/schemas/Stage" }
+        version: { type: integer, minimum: 1 }
+        lost_reason: { type: string, maxLength: 1000, description: Required when to_stage is lost }
+        reopen_reason: { type: string, maxLength: 1000, description: Required when reopening a lost deal }
+
+    DealPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deal"
+        next_cursor:
+          type: [string, "null"]
+
+    HistoryEntry:
+      type: object
+      required: [id, from_stage, to_stage, reason, changed_by, changed_at]
+      properties:
+        id: { type: string, format: uuid }
+        from_stage:
+          oneOf:
+            - $ref: "#/components/schemas/Stage"
+            - type: "null"
+          description: null for the entry written when the deal was created
+        to_stage: { $ref: "#/components/schemas/Stage" }
+        reason: { type: [string, "null"], description: lost_reason or reopen_reason of the change }
+        changed_by: { type: string, format: uuid }
+        changed_at: { type: string, format: date-time }

@@ -25,6 +25,34 @@ type Contact struct {
 	SearchText *string    `json:"search_text"`
 }
 
+type Deal struct {
+	ID                uuid.UUID  `json:"id"`
+	TenantID          uuid.UUID  `json:"tenant_id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Title             string     `json:"title"`
+	Amount            int64      `json:"amount"`
+	Stage             string     `json:"stage"`
+	ExpectedCloseDate *time.Time `json:"expected_close_date"`
+	OwnerID           uuid.UUID  `json:"owner_id"`
+	LostReason        *string    `json:"lost_reason"`
+	Version           int32      `json:"version"`
+	ClosedAt          *time.Time `json:"closed_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	DeletedAt         *time.Time `json:"deleted_at"`
+}
+
+type DealStageHistory struct {
+	ID        uuid.UUID `json:"id"`
+	TenantID  uuid.UUID `json:"tenant_id"`
+	DealID    uuid.UUID `json:"deal_id"`
+	FromStage *string   `json:"from_stage"`
+	ToStage   string    `json:"to_stage"`
+	Reason    *string   `json:"reason"`
+	ChangedBy uuid.UUID `json:"changed_by"`
+	ChangedAt time.Time `json:"changed_at"`
+}
+
 type RefreshToken struct {
 	ID        uuid.UUID  `json:"id"`
 	UserID    uuid.UUID  `json:"user_id"`

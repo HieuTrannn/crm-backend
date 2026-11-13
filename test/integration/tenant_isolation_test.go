@@ -38,6 +38,7 @@ type env struct {
 	db       *database.DB  // app_user, tenant-scoped helper
 	app      *pgxpool.Pool // app_user, single connection to prove no tenant leaks between uses
 	migrator *pgxpool.Pool // table owner, NOT superuser (like Neon's owner role)
+	appURL   string        // app_user connection string, for tests that need their own pool
 }
 
 // setup starts Postgres, runs the migration up/down/up as a non-superuser owner,
@@ -72,7 +73,8 @@ func setup(t *testing.T) env {
 	t.Setenv("APP_USER_PASSWORD", appUserPassword)
 	runMigrations(t, migratorURL)
 
-	appCfg, err := pgxpool.ParseConfig(withUser(t, superURL, "app_user", appUserPassword))
+	appURL := withUser(t, superURL, "app_user", appUserPassword)
+	appCfg, err := pgxpool.ParseConfig(appURL)
 	require.NoError(t, err)
 	appCfg.MaxConns = 1
 	app, err := pgxpool.NewWithConfig(ctx, appCfg)
@@ -83,7 +85,7 @@ func setup(t *testing.T) env {
 	require.NoError(t, err)
 	t.Cleanup(migrator.Close)
 
-	return env{db: database.New(app), app: app, migrator: migrator}
+	return env{db: database.New(app), app: app, migrator: migrator, appURL: appURL}
 }
 
 // runMigrations applies up, down, up so the Down section is exercised too.
