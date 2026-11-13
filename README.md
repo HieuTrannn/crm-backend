@@ -87,6 +87,20 @@ The API and goose both read `.env` automatically; real environment variables tak
 `APP_USER_PASSWORD` is read only when the role is first created — to change it later, run
 `ALTER ROLE app_user PASSWORD '...'`.
 
+### Optional: local HTTPS
+
+The API can also listen on `https://localhost:8443` next to plain HTTP. Reuse the
+ASP.NET Core development certificate (or any PEM pair, e.g. from mkcert):
+
+```bash
+dotnet dev-certs https --export-path certs/localhost.pem --format PEM --no-password
+dotnet dev-certs https --trust   # once, so browsers accept it
+```
+
+Then set `TLS_CERT_FILE=certs/localhost.pem` and `TLS_KEY_FILE=certs/localhost.key` in `.env`,
+or pick the **API (http + https)** profile in VS Code's Run and Debug panel (`.vscode/launch.json`).
+`certs/` is git-ignored. Production does not use this: Render terminates TLS.
+
 ### 3. Migrate and run
 
 ```bash
@@ -121,3 +135,7 @@ curl localhost:8080/readyz    # {"status":"ok"}  database is reachable (503 othe
 Business endpoints will live under `/api/v1`. Errors use one format:
 `{"error":{"code":"UPPER_SNAKE","message":"..."},"request_id":"..."}`, and every response
 carries an `X-Request-ID` header. Full contract: [api/openapi.yaml](api/openapi.yaml).
+
+With `APP_ENV=development`, Swagger UI is served at <http://localhost:8080/docs>.
+It runs on the same origin as the API, so after `POST /api/v1/auth/login` in "Try it out",
+the auth cookies are sent automatically to `/api/v1/me`.
