@@ -10,6 +10,21 @@ import (
 	"github.com/google/uuid"
 )
 
+type Contact struct {
+	ID         uuid.UUID  `json:"id"`
+	TenantID   uuid.UUID  `json:"tenant_id"`
+	FullName   string     `json:"full_name"`
+	Email      *string    `json:"email"`
+	Phone      *string    `json:"phone"`
+	Company    *string    `json:"company"`
+	Notes      *string    `json:"notes"`
+	OwnerID    uuid.UUID  `json:"owner_id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	DeletedAt  *time.Time `json:"deleted_at"`
+	SearchText *string    `json:"search_text"`
+}
+
 type RefreshToken struct {
 	ID        uuid.UUID  `json:"id"`
 	UserID    uuid.UUID  `json:"user_id"`
