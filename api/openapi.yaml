@@ -1,10 +1,20 @@
 openapi: 3.1.0
 info:
   title: Mini CRM API
-  version: 0.1.0
+  version: 0.2.0
+  description: |
+    Authentication uses two HttpOnly, SameSite=Lax cookies (Secure in production):
+    `access_token` (JWT HS256, 15 minutes, Path=/api) and `refresh_token`
+    (7 days, Path=/api/v1/auth, rotated on every refresh).
+tags:
+  - name: System
+    description: Health checks (outside /api/v1)
+  - name: Auth
+    description: Registration, login, session cookies and the current user
 paths:
   /healthz:
     get:
+      tags: [System]
       summary: Liveness probe
       responses:
         "200":
@@ -15,6 +25,7 @@ paths:
                 $ref: "#/components/schemas/Status"
   /readyz:
     get:
+      tags: [System]
       summary: Readiness probe (database reachable)
       responses:
         "200":
@@ -29,7 +40,129 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Status"
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a tenant and its owner in one transaction (FR-AUTH-01)
+      description: Does not log in; call /auth/login afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: EMAIL_TAKEN or SLUG_TAKEN
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive session cookies (FR-AUTH-03)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "204":
+          description: Logged in; sets access_token and refresh_token cookies
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          description: INVALID_CREDENTIALS (same response for unknown email and wrong password)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: TOO_MANY_ATTEMPTS (5 failures per 15 minutes per IP + email, NFR-SEC-02)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate the refresh token and issue a new access token (FR-AUTH-04)
+      description: |
+        Requires the refresh_token cookie. Presenting an already rotated token
+        revokes the whole session family.
+      responses:
+        "204":
+          description: New cookies set
+        "401":
+          description: INVALID_REFRESH_TOKEN (missing, expired, revoked or reused)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the session and clear cookies (FR-AUTH-05)
+      responses:
+        "204":
+          description: Logged out (also when no valid cookie was sent)
+
+  /api/v1/me:
+    get:
+      tags: [Auth]
+      summary: Current user and tenant (FR-AUTH-06)
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: UNAUTHENTICATED
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+
+  responses:
+    ValidationError:
+      description: VALIDATION_ERROR; details maps each invalid field to the failed rule
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
   schemas:
     Status:
       type: object
@@ -38,3 +171,49 @@ components:
         status:
           type: string
           enum: [ok, unavailable]
+
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: EMAIL_TAKEN }
+            message: { type: string }
+            details: {}
+        request_id: { type: string }
+
+    RegisterRequest:
+      type: object
+      required: [company_name, slug, email, password, full_name]
+      properties:
+        company_name: { type: string, maxLength: 200 }
+        slug:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          minLength: 8
+          description: At most 72 bytes (bcrypt limit)
+        full_name: { type: string, maxLength: 200 }
+
+    Me:
+      type: object
+      required: [id, email, full_name, role, tenant]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role: { type: string, enum: [owner, member] }
+        tenant:
+          type: object
+          required: [id, name, slug]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            slug: { type: string }

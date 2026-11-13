@@ -13,6 +13,12 @@ linters:
     - gosec
     - misspell
     - noctx
+  exclusions:
+    rules:
+      # Tests build request cookies, which carry no Secure/HttpOnly/SameSite attributes.
+      - path: _test\.go
+        linters: [gosec]
+        text: G124
 
 formatters:
   enable:

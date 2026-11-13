@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/config"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 	"github.com/HieuTrannn/crm-backend/internal/platform/logger"
@@ -53,9 +54,18 @@ func run() error {
 	}
 	defer pool.Close()
 
+	tokens := auth.NewTokenIssuer(cfg.JWTSecret)
+	// NFR-SEC-02: 5 failed logins per 15 minutes per IP + email.
+	limiter := auth.NewMemoryLimiter(5, 3*time.Minute)
+	authSvc, err := auth.NewService(auth.NewPostgresRepository(database.New(pool), pool), tokens, limiter, auth.BcryptCost)
+	if err != nil {
+		return fmt.Errorf("init auth: %w", err)
+	}
+	authHandler := auth.NewHandler(authSvc, tokens, cfg.AppEnv == config.EnvProduction)
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           server.NewRouter(log, pool),
+		Handler:           server.NewRouter(log, pool, authHandler),
 		ReadHeaderTimeout: 5 * time.Second, // guards against Slowloris
 	}
 
