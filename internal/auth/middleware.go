@@ -24,6 +24,16 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	return p, ok
 }
 
+// CurrentPrincipal returns the caller for a handler behind RequireAuth. If the
+// route was mounted without RequireAuth it writes a 401 and returns false.
+func CurrentPrincipal(c *gin.Context) (Principal, bool) {
+	p, ok := PrincipalFrom(c.Request.Context())
+	if !ok {
+		httpx.WriteError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "authentication required")
+	}
+	return p, ok
+}
+
 // RequireAuth verifies the access_token cookie and stores the Principal in the
 // request context. Missing or invalid token: 401 (FR-AUTH-06).
 func RequireAuth(tokens *TokenIssuer) gin.HandlerFunc {

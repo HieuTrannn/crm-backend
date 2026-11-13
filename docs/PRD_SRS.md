@@ -93,7 +93,7 @@ Mỗi yêu cầu có mã để tham chiếu trong commit, test và prompt. “Ph
 
 | Mã | Yêu cầu | Tiêu chí chấp nhận |
 | --- | --- | --- |
-| FR-AUTH-01 | Đăng ký tạo đồng thời tenant (tên công ty, slug duy nhất) và user có vai trò `owner`, trong một transaction | Lỗi ở bất kỳ bước nào thì không tạo gì cả; email trùng trả 409 |
+| FR-AUTH-01 | Đăng ký tạo đồng thời tenant (tên công ty, slug duy nhất) và user có vai trò `owner`, trong một transaction | Lỗi ở bất kỳ bước nào thì không tạo gì cả; email trùng trả 409. Slug **tự sinh từ tên công ty** (bỏ dấu: "Công ty Đại Phát" → `cong-ty-dai-phat`), trùng thì thêm hậu tố ngẫu nhiên 6 ký tự; đăng ký không tự đăng nhập |
 | FR-AUTH-02 | Mật khẩu hash bằng bcrypt (cost ≥ 12), tối thiểu 8 ký tự | DB không chứa mật khẩu gốc |
 | FR-AUTH-03 | Đăng nhập trả access token (JWT, hạn 15 phút) và refresh token (hạn 7 ngày), cả hai trong cookie httpOnly | Sai email hoặc mật khẩu trả cùng một thông báo 401 |
 | FR-AUTH-04 | Refresh token xoay vòng (rotation): mỗi lần refresh cấp token mới, thu hồi token cũ; dùng lại token đã thu hồi thì thu hồi cả chuỗi | Lưu hash của refresh token trong DB, không lưu token gốc |
@@ -107,7 +107,7 @@ Mỗi yêu cầu có mã để tham chiếu trong commit, test và prompt. “Ph
 | --- | --- | --- |
 | FR-CON-01 | Tạo khách hàng: họ tên (bắt buộc), email, số điện thoại, công ty, ghi chú, người phụ trách | Email hợp lệ nếu có; email trùng trong cùng tenant trả 409, khác tenant thì được phép |
 | FR-CON-02 | Danh sách có phân trang kiểu cursor (`limit` mặc định 20, tối đa 100), sắp xếp mới nhất trước | Trả `next_cursor`; không trùng hoặc sót bản ghi khi có dữ liệu mới chèn vào |
-| FR-CON-03 | Tìm kiếm theo tên, email, số điện thoại, không phân biệt hoa thường và dấu tiếng Việt (“nguyen” tìm ra “Nguyễn”) | Dùng extension `unaccent` + `pg_trgm` |
+| FR-CON-03 | Tìm kiếm theo tên, email, số điện thoại, không phân biệt hoa thường và dấu tiếng Việt (“nguyen” tìm ra “Nguyễn”) | Dùng `unaccent` qua cột sinh sẵn `search_text` (xem mục 5.8 và `docs/performance.md`) |
 | FR-CON-04 | Xem chi tiết, sửa, xóa mềm (`deleted_at`) | Khách đã xóa không hiện trong danh sách; còn deal đang mở thì không cho xóa (409) |
 
 ### 3.3 Deal và pipeline (DEAL)
@@ -125,10 +125,11 @@ Trạng thái deal: `lead` → `qualified` → `proposal` → `won` hoặc `lost
 | Mã | Yêu cầu | Tiêu chí chấp nhận |
 | --- | --- | --- |
 | FR-DEAL-01 | Tạo deal: tiêu đề, giá trị, khách hàng, ngày dự kiến chốt, người phụ trách; trạng thái ban đầu `lead` | Giá trị lưu bằng số nguyên (đơn vị VND), không dùng float; giá trị âm trả 400 |
-| FR-DEAL-02 | Chuyển trạng thái chỉ theo bảng trên | Chuyển sai trả 422 kèm mã lỗi `INVALID_TRANSITION`; `lost` bắt buộc có `lost_reason` |
-| FR-DEAL-03 | Mỗi lần chuyển trạng thái ghi một dòng vào `deal_stage_history` (từ, sang, ai, lúc nào) trong cùng transaction | Lịch sử khớp với trạng thái hiện tại |
+| FR-DEAL-02 | Chuyển trạng thái chỉ theo bảng trên | Chuyển sai trả 422 kèm mã lỗi `INVALID_TRANSITION`; `lost` bắt buộc có `lost_reason`, mở lại `lost` → `lead` bắt buộc có `reopen_reason` (thiếu lý do trả 422 `REASON_REQUIRED`) |
+| FR-DEAL-03 | Mỗi lần chuyển trạng thái ghi một dòng vào `deal_stage_history` (từ, sang, lý do, ai, lúc nào) trong cùng transaction; tạo deal cũng ghi một dòng `NULL → lead` | Lịch sử khớp với trạng thái hiện tại; xem qua `GET /deals/{id}/history` |
 | FR-DEAL-04 | Optimistic locking: mỗi deal có cột `version`; request sửa phải gửi `version` đã đọc | Version lệch trả 409 `VERSION_CONFLICT` kèm dữ liệu mới nhất; có test 2 goroutine sửa cùng lúc, đúng một cái thành công |
 | FR-DEAL-05 | Danh sách deal lọc theo trạng thái, người phụ trách, khách hàng; dạng bảng và dạng Kanban | Phân trang cursor như FR-CON-02 |
+| FR-DEAL-06 | Xóa mềm deal (`deleted_at`) cho deal tạo nhầm hoặc trùng; request gửi `version` như FR-DEAL-04 | Deal đã xóa không hiện ở mọi API (404) và không còn tính là deal mở của khách hàng; lịch sử stage giữ nguyên trong DB |
 
 ### 3.4 Dashboard (DASH)
 
@@ -292,17 +293,17 @@ ID dùng UUID v7 sinh trong Go (có thứ tự theo thời gian, tốt cho index
 | tenants | id, name, slug (unique), created\_at | Không bật RLS |
 | users | id, tenant\_id, email (citext, unique), password\_hash, full\_name, role (`owner`/`member`), created\_at | RLS; đăng nhập tra cứu qua hàm `SECURITY DEFINER` vì lúc đó chưa biết tenant |
 | refresh\_tokens | id, user\_id, tenant\_id, token\_hash (unique), family\_id, expires\_at, revoked\_at | `family_id` phục vụ thu hồi cả chuỗi khi phát hiện dùng lại |
-| contacts | id, tenant\_id, full\_name, email, phone, company, notes, owner\_id, created\_at, updated\_at, deleted\_at | Unique (tenant\_id, email) khi chưa xóa |
-| deals | id, tenant\_id, contact\_id, title, amount, stage, expected\_close\_date, owner\_id, lost\_reason, version, closed\_at, created\_at, updated\_at | CHECK stage hợp lệ, amount ≥ 0 |
-| deal\_stage\_history | id, tenant\_id, deal\_id, from\_stage, to\_stage, changed\_by, changed\_at | Chỉ thêm, không sửa |
+| contacts | id, tenant\_id, full\_name, email (citext), phone, company, notes, owner\_id, created\_at, updated\_at, deleted\_at, search\_text (sinh sẵn) | Unique (tenant\_id, email) khi chưa xóa; owner cùng tenant (FK kép) |
+| deals | id, tenant\_id, contact\_id, title, amount, stage, expected\_close\_date, owner\_id, lost\_reason, version, closed\_at, created\_at, updated\_at, deleted\_at | CHECK stage hợp lệ, amount ≥ 0; `lost_reason` chỉ có khi `lost`, `closed_at` chỉ có khi `won`/`lost`; contact và owner cùng tenant (FK kép) |
+| deal\_stage\_history | id, tenant\_id, deal\_id, from\_stage, to\_stage, reason, changed\_by, changed\_at | Chỉ thêm, không sửa (`app_user` không có UPDATE/DELETE) |
 | import\_jobs | id, tenant\_id, created\_by, status, total\_rows, processed\_rows, success\_rows, error\_rows, created\_at, finished\_at |  |
 | import\_job\_errors | job\_id, tenant\_id, row\_number, reason |  |
 
 Index quan trọng:
 
 - `contacts (tenant_id, created_at DESC, id DESC) WHERE deleted_at IS NULL` cho phân trang cursor.
-- GIN `pg_trgm` trên `immutable_unaccent(lower(full_name || ' ' || coalesce(email,'') || ' ' || coalesce(phone,'')))` cho tìm kiếm không dấu. Cần tự tạo hàm `immutable_unaccent` bọc `unaccent`, vì bản gốc không được dùng trong index.
-- `deals (tenant_id, stage)` cho dashboard và Kanban.
+- ~~GIN `pg_trgm` trên `immutable_unaccent(lower(...))`~~ — **đã bỏ**: dưới RLS, PostgreSQL không dùng được index này cho `LIKE` (xem mục 5.8). Thay bằng cột sinh sẵn `search_text = immutable_unaccent(lower(full_name || ' ' || coalesce(email,'') || ' ' || coalesce(phone,'')))`. Vẫn cần hàm `immutable_unaccent` bọc `unaccent`, vì bản gốc không được dùng trong cột sinh sẵn hay index.
+- `deals (tenant_id, stage)` cho dashboard và Kanban; `deals (tenant_id, created_at DESC, id DESC)` cho phân trang; `deals (tenant_id, contact_id)` cho kiểm tra deal mở khi xóa khách hàng.
 
 ### 5.5 Row-Level Security
 
@@ -352,7 +353,7 @@ Không có dòng nào được cập nhật (`pgx.ErrNoRows`) thì service đọ
 
 | Method | Path | Mô tả | Yêu cầu |
 | --- | --- | --- | --- |
-| POST | /auth/register | Tạo tenant + owner | FR-AUTH-01 |
+| POST | /auth/register | Tạo tenant + owner; body `{company_name, email, password, full_name}` (slug tự sinh) | FR-AUTH-01 |
 | POST | /auth/login | Đăng nhập, set cookie | FR-AUTH-03 |
 | POST | /auth/refresh | Xoay vòng refresh token | FR-AUTH-04 |
 | POST | /auth/logout | Thu hồi token | FR-AUTH-05 |
@@ -361,8 +362,9 @@ Không có dòng nào được cập nhật (`pgx.ErrNoRows`) thì service đọ
 | GET, POST | /contacts | Danh sách (`?q=&cursor=&limit=`), tạo mới | FR-CON-01..03 |
 | GET, PATCH, DELETE | /contacts/{id} | Chi tiết, sửa, xóa mềm | FR-CON-04 |
 | GET, POST | /deals | Danh sách (`?stage=&owner_id=&contact_id=`), tạo mới | FR-DEAL-01, 05 |
-| GET, PATCH | /deals/{id} | Chi tiết, sửa (body có `version`) | FR-DEAL-04 |
-| POST | /deals/{id}/transition | `{to_stage, version, lost_reason?}` | FR-DEAL-02, 03 |
+| GET, PATCH, DELETE | /deals/{id} | Chi tiết, sửa (body có `version`), xóa mềm (`?version=`) | FR-DEAL-04, 06 |
+| POST | /deals/{id}/transition | `{to_stage, version, lost_reason?, reopen_reason?}` | FR-DEAL-02, 03 |
+| GET | /deals/{id}/history | Lịch sử chuyển stage, cũ nhất trước (không phân trang) | FR-DEAL-03 |
 | GET | /dashboard/pipeline | Số lượng, tổng giá trị theo stage | FR-DASH-01 |
 | GET | /dashboard/monthly | Doanh số, tỷ lệ thắng 6 tháng | FR-DASH-02 |
 | POST | /imports/contacts | Upload CSV, trả 202 + job id | FR-IMP-01 |
@@ -370,6 +372,24 @@ Không có dòng nào được cập nhật (`pgx.ErrNoRows`) thì service đọ
 | GET | /imports/{id}/errors | Danh sách dòng lỗi | FR-IMP-03 |
 | POST | /imports/{id}/cancel | Hủy job | FR-IMP-05 |
 | GET | /healthz, /readyz | Kiểm tra sức khỏe (ngoài `/api/v1`) | FR-SYS-01 |
+| GET | /docs | Swagger UI, chỉ bật khi `APP_ENV=development` (ngoài `/api/v1`) | NFR-QA-04 |
+
+Mã lỗi nghiệp vụ dùng chung: 404 `NOT_FOUND` (kể cả id của tenant khác), 409 `EMAIL_TAKEN` / `VERSION_CONFLICT` (kèm bản mới nhất trong `details`) / `CONTACT_HAS_OPEN_DEALS`, 422 `INVALID_TRANSITION` / `REASON_REQUIRED` / `INVALID_CONTACT` / `INVALID_OWNER`, 400 `VALIDATION_ERROR` (kèm danh sách trường lỗi trong `details`).
+
+### 5.8 Thay đổi so với bản gốc
+
+Các quyết định phát sinh khi triển khai; đã phản ánh vào các bảng phía trên.
+
+| Ngày | Phạm vi | Thay đổi | Lý do |
+| --- | --- | --- | --- |
+| 2026-11-12 | FR-AUTH-04, 05 | Cookie `refresh_token` có dạng `<tenant_id>.<token>` | Lúc refresh, access token có thể đã hết hạn nên chưa biết tenant; cần tenant để mở transaction có RLS. Sửa phần tenant chỉ dẫn tới "không tìm thấy" |
+| 2026-11-12 | FR-AUTH-03 | Đăng nhập tra cứu user qua hàm `SECURITY DEFINER` `auth_find_user_by_email` (cố định `search_path`, chỉ trả cột cần thiết) | Lúc đăng nhập chưa biết tenant, RLS sẽ chặn bảng `users` |
+| 2026-11-13 | FR-AUTH-01 | Bỏ trường `slug` khỏi request đăng ký; slug tự sinh từ tên công ty, trùng thì thêm hậu tố ngẫu nhiên | Người dùng không phải nghĩ ra slug; INSERT-rồi-thử-lại tránh race khi hai người cùng đăng ký một tên |
+| 2026-11-13 | FR-CON-03, mục 5.4 | Bỏ GIN trigram index, thay bằng cột sinh sẵn `search_text` | Dưới RLS chỉ hàm LEAKPROOF mới được dùng làm điều kiện index, mà `LIKE` không phải (chỉ superuser mới đánh dấu được, Neon không cho). Đo 100.000 dòng: tìm hiếm 120 ms → 19 ms (`docs/performance.md`) |
+| 2026-11-13 | FR-CON-04 | Kiểm tra "còn deal mở" chạy trong cùng transaction với xóa mềm; xóa khóa contact `FOR UPDATE`, tạo deal khóa `FOR SHARE` | Không để một deal mới lọt vào giữa lúc kiểm tra và lúc xóa |
+| 2026-11-13 | FR-DEAL-02, 03 | Thêm `reopen_reason` và cột `deal_stage_history.reason`; tạo deal ghi dòng lịch sử `NULL → lead`; thêm `GET /deals/{id}/history` | PRD yêu cầu lý do khi mở lại `lost`; lịch sử phải khớp trạng thái hiện tại và xem được qua API |
+| 2026-11-13 | FR-DEAL-06 (mới) | Xóa mềm deal, có optimistic locking | Không có cách gỡ deal tạo nhầm; deal nhầm còn mở thì cũng không xóa được khách hàng |
+| 2026-11-13 | FR-CON-01..04 | Contacts giữ nguyên CRUD: tạo, xem (chi tiết, danh sách, tìm kiếm), sửa một phần (PATCH), xóa mềm | Đã đủ, không thêm API |
 
 ## 6. Deploy miễn phí và CI/CD
 

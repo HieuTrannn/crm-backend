@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,17 +19,13 @@ import (
 
 	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/contact"
+	"github.com/HieuTrannn/crm-backend/internal/deal"
 	"github.com/HieuTrannn/crm-backend/internal/server"
 )
 
-// alwaysOpenDeals stands in for the future deal module: every contact has an open deal.
-type alwaysOpenDeals struct{}
-
-func (alwaysOpenDeals) HasOpenDeals(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return true, nil
-}
-
-type contactEnv struct {
+// apiEnv is a router with the contact and deal modules over a migrated database
+// with two seeded tenants, plus an access cookie for each tenant's owner.
+type apiEnv struct {
 	h       http.Handler
 	s       seeded
 	cookieA *http.Cookie
@@ -38,22 +33,24 @@ type contactEnv struct {
 	baseEnv env
 }
 
-func newContactEnv(t *testing.T, deals contact.DealChecker) contactEnv {
+func newAPIEnv(t *testing.T) apiEnv {
 	t.Helper()
 	e := setup(t)
 	s := seed(t, e)
 	tokens := auth.NewTokenIssuer(testJWTSecret)
+	requireAuth := auth.RequireAuth(tokens)
 	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app,
-		contact.NewHandler(contact.NewService(contact.NewPostgresRepository(e.db), deals), auth.RequireAuth(tokens)))
+		contact.NewHandler(contact.NewService(contact.NewPostgresRepository(e.db)), requireAuth),
+		deal.NewHandler(deal.NewService(deal.NewPostgresRepository(e.db)), requireAuth))
 	cookie := func(user, tenant uuid.UUID) *http.Cookie {
 		tok, _, err := tokens.Issue(auth.Principal{UserID: user, TenantID: tenant, Role: auth.RoleOwner}, time.Now())
 		require.NoError(t, err)
 		return &http.Cookie{Name: "access_token", Value: tok}
 	}
-	return contactEnv{h: h, s: s, cookieA: cookie(s.userA, s.tenantA), cookieB: cookie(s.userB, s.tenantB), baseEnv: e}
+	return apiEnv{h: h, s: s, cookieA: cookie(s.userA, s.tenantA), cookieB: cookie(s.userB, s.tenantB), baseEnv: e}
 }
 
-func createContact(t *testing.T, ce contactEnv, cookie *http.Cookie, body map[string]any) contact.Contact {
+func createContact(t *testing.T, ce apiEnv, cookie *http.Cookie, body map[string]any) contact.Contact {
 	t.Helper()
 	rec := call(t, ce.h, http.MethodPost, "/api/v1/contacts", body, cookie)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
@@ -67,7 +64,7 @@ type contactPage struct {
 	NextCursor *string           `json:"next_cursor"`
 }
 
-func listContacts(t *testing.T, ce contactEnv, cookie *http.Cookie, query url.Values) contactPage {
+func listContacts(t *testing.T, ce apiEnv, cookie *http.Cookie, query url.Values) contactPage {
 	t.Helper()
 	rec := call(t, ce.h, http.MethodGet, "/api/v1/contacts?"+query.Encode(), nil, cookie)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -79,7 +76,7 @@ func listContacts(t *testing.T, ce contactEnv, cookie *http.Cookie, query url.Va
 // TestContactPagination proves FR-CON-02: walking the pages returns every
 // contact exactly once, even when new contacts are inserted between two pages.
 func TestContactPagination(t *testing.T) {
-	ce := newContactEnv(t, contact.NoDeals{})
+	ce := newAPIEnv(t)
 
 	original := map[uuid.UUID]bool{}
 	for i := range 25 {
@@ -134,7 +131,7 @@ func TestContactPagination(t *testing.T) {
 // TestContactSearch proves FR-CON-03: case- and accent-insensitive substring
 // search over name, email and phone.
 func TestContactSearch(t *testing.T) {
-	ce := newContactEnv(t, contact.NoDeals{})
+	ce := newAPIEnv(t)
 	createContact(t, ce, ce.cookieA, map[string]any{"full_name": "Nguyễn Văn An"})
 	createContact(t, ce, ce.cookieA, map[string]any{"full_name": "Trần Thị Bình", "email": "binh@acme.vn"})
 	createContact(t, ce, ce.cookieA, map[string]any{"full_name": "Lê Hoà", "phone": "0901234567"})
@@ -169,7 +166,7 @@ func TestContactSearch(t *testing.T) {
 
 // TestContactCRUD covers FR-CON-01/04, validation and the error format.
 func TestContactCRUD(t *testing.T) {
-	ce := newContactEnv(t, contact.NoDeals{})
+	ce := newAPIEnv(t)
 
 	c := createContact(t, ce, ce.cookieA, map[string]any{"full_name": "An", "email": "AN@x.io", "phone": "0901"})
 	assert.Equal(t, ce.s.userA, c.OwnerID, "owner defaults to the caller")
@@ -226,13 +223,25 @@ func TestContactCRUD(t *testing.T) {
 		createContact(t, ce, ce.cookieA, map[string]any{"full_name": "New An", "email": "an@x.io"})
 	})
 
-	t.Run("delete with open deals is 409", func(t *testing.T) {
-		withDeals := newContactEnv(t, alwaysOpenDeals{})
-		c := createContact(t, withDeals, withDeals.cookieA, map[string]any{"full_name": "Has deals"})
+	t.Run("delete is 409 while a deal is open, allowed once it is closed", func(t *testing.T) {
+		c := createContact(t, ce, ce.cookieA, map[string]any{"full_name": "Has deals"})
+		d := createDeal(t, ce, ce.cookieA, map[string]any{"contact_id": c.ID, "title": "Deal", "amount": 1000})
+		contactPath := "/api/v1/contacts/" + c.ID.String()
 
-		rec := call(t, withDeals.h, http.MethodDelete, "/api/v1/contacts/"+c.ID.String(), nil, withDeals.cookieA)
+		rec := call(t, ce.h, http.MethodDelete, contactPath, nil, ce.cookieA)
 		require.Equal(t, http.StatusConflict, rec.Code)
 		assert.Equal(t, "CONTACT_HAS_OPEN_DEALS", errorCode(t, rec))
+
+		rec = call(t, ce.h, http.MethodPost, "/api/v1/deals/"+d.ID.String()+"/transition",
+			map[string]any{"to_stage": "lost", "version": d.Version, "lost_reason": "budget"}, ce.cookieA)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+		require.Equal(t, http.StatusNoContent, call(t, ce.h, http.MethodDelete, contactPath, nil, ce.cookieA).Code)
+
+		rec = call(t, ce.h, http.MethodPost, "/api/v1/deals",
+			map[string]any{"contact_id": c.ID, "title": "Too late", "amount": 1}, ce.cookieA)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "no new deal for a deleted contact")
+		assert.Equal(t, "INVALID_CONTACT", errorCode(t, rec))
 	})
 
 	t.Run("no access token is 401", func(t *testing.T) {
@@ -242,7 +251,7 @@ func TestContactCRUD(t *testing.T) {
 
 // TestContactTenantIsolation proves NFR-ISO-01/04 for contacts through the API.
 func TestContactTenantIsolation(t *testing.T) {
-	ce := newContactEnv(t, contact.NoDeals{})
+	ce := newAPIEnv(t)
 	bContact := createContact(t, ce, ce.cookieB, map[string]any{"full_name": "Secret of B", "email": "secret@b.test"})
 	path := "/api/v1/contacts/" + bContact.ID.String()
 

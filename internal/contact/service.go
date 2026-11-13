@@ -23,32 +23,20 @@ type Store interface {
 	GetForUpdate(ctx context.Context, id uuid.UUID) (Contact, error)
 	Update(ctx context.Context, c Contact) (Contact, error)
 	SoftDelete(ctx context.Context, id uuid.UUID) error
+	// HasOpenDeals reports whether the contact has a deal that is not won or lost.
+	HasOpenDeals(ctx context.Context, id uuid.UUID) (bool, error)
 	// List returns up to p.Limit rows after the cursor; p.Query is LIKE-escaped.
 	List(ctx context.Context, p ListParams) ([]Contact, error)
 }
 
-// DealChecker reports whether a contact still has open deals (FR-CON-04).
-type DealChecker interface {
-	HasOpenDeals(ctx context.Context, tenantID, contactID uuid.UUID) (bool, error)
-}
-
-// NoDeals is the DealChecker used until the deal module exists.
-// TODO(deal): replace with a query on deals that runs in the same transaction as
-// the soft delete (and locks the contact), so a deal created concurrently cannot slip in.
-type NoDeals struct{}
-
-// HasOpenDeals implements DealChecker.
-func (NoDeals) HasOpenDeals(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return false, nil }
-
 // Service implements the contact use cases. Every method is scoped to tenantID.
 type Service struct {
-	repo  Repository
-	deals DealChecker
+	repo Repository
 }
 
 // NewService wires the contact service.
-func NewService(repo Repository, deals DealChecker) *Service {
-	return &Service{repo: repo, deals: deals}
+func NewService(repo Repository) *Service {
+	return &Service{repo: repo}
 }
 
 // Create adds a contact; the owner defaults to the caller (FR-CON-01).
@@ -127,10 +115,12 @@ func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, in UpdateI
 // Delete soft-deletes a contact unless it still has open deals (FR-CON-04).
 func (s *Service) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	err := s.repo.WithTenant(ctx, tenantID, func(st Store) error {
+		// Locking the contact first serializes with deal creation, which takes
+		// FOR SHARE on the same row: no deal can be added between check and delete.
 		if _, err := st.GetForUpdate(ctx, id); err != nil {
 			return err
 		}
-		open, err := s.deals.HasOpenDeals(ctx, tenantID, id)
+		open, err := st.HasOpenDeals(ctx, id)
 		if err != nil {
 			return fmt.Errorf("check open deals: %w", err)
 		}

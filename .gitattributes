@@ -1,0 +1,2 @@
+# Keep LF in the working tree on Windows too, so gofmt and golangci-lint see what CI sees.
+* text=auto eol=lf

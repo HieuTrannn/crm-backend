@@ -12,6 +12,27 @@ import (
 	"github.com/google/uuid"
 )
 
+const contactHasOpenDeals = `-- name: ContactHasOpenDeals :one
+SELECT EXISTS (
+    SELECT 1 FROM deals
+    WHERE tenant_id = $1 AND contact_id = $2 AND stage NOT IN ('won', 'lost') AND deleted_at IS NULL
+)
+`
+
+type ContactHasOpenDealsParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	ContactID uuid.UUID `json:"contact_id"`
+}
+
+// Open = not won and not lost. Runs in the soft-delete transaction after the
+// contact row is locked FOR UPDATE (FR-CON-04).
+func (q *Queries) ContactHasOpenDeals(ctx context.Context, arg ContactHasOpenDealsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, contactHasOpenDeals, arg.TenantID, arg.ContactID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const createContact = `-- name: CreateContact :one
 
 INSERT INTO contacts (id, tenant_id, full_name, email, phone, company, notes, owner_id)

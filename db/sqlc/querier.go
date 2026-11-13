@@ -6,11 +6,17 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
 
 type Querier interface {
+	// Open = not won and not lost. Runs in the soft-delete transaction after the
+	// contact row is locked FOR UPDATE (FR-CON-04).
+	ContactHasOpenDeals(ctx context.Context, arg ContactHasOpenDealsParams) (bool, error)
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
 	CreateContact(ctx context.Context, arg CreateContactParams) (Contact, error)
+	CreateDeal(ctx context.Context, arg CreateDealParams) (Deal, error)
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) error
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
 	CreateTenant(ctx context.Context, arg CreateTenantParams) error
@@ -18,11 +24,22 @@ type Querier interface {
 	GetContact(ctx context.Context, arg GetContactParams) (Contact, error)
 	// Locks the row for a read-modify-write update in the same transaction.
 	GetContactForUpdate(ctx context.Context, arg GetContactForUpdateParams) (Contact, error)
+	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
 	GetRefreshTokenByHash(ctx context.Context, arg GetRefreshTokenByHashParams) (GetRefreshTokenByHashRow, error)
 	GetUserWithTenant(ctx context.Context, arg GetUserWithTenantParams) (GetUserWithTenantRow, error)
+	InsertStageHistory(ctx context.Context, arg InsertStageHistoryParams) error
 	// Keyset pagination: rows strictly after the cursor (created_at, id), newest first.
 	// The first page passes a cursor beyond any real row. Uses contacts_tenant_created_idx.
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]Contact, error)
+	// Optional filters are NULL when absent (FR-DEAL-05). Keyset pagination as for contacts.
+	ListDeals(ctx context.Context, arg ListDealsParams) ([]Deal, error)
+	// Oldest first; id breaks ties within one transaction. Uses deal_stage_history_deal_idx.
+	ListStageHistory(ctx context.Context, arg ListStageHistoryParams) ([]ListStageHistoryRow, error)
+	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
+	// Locks a live contact against soft delete until the transaction ends. Contact
+	// deletion takes FOR UPDATE on the same row, so creating a deal and deleting its
+	// contact cannot interleave.
+	LockLiveContact(ctx context.Context, arg LockLiveContactParams) (uuid.UUID, error)
 	// Revokes one token only if it is still active; 0 rows means someone already used it.
 	RevokeRefreshToken(ctx context.Context, arg RevokeRefreshTokenParams) (int64, error)
 	RevokeRefreshTokenFamily(ctx context.Context, arg RevokeRefreshTokenFamilyParams) error
@@ -30,7 +47,13 @@ type Querier interface {
 	// unaccented). query must be LIKE-escaped by the caller; SQL normalizes it the same way.
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]Contact, error)
 	SoftDeleteContact(ctx context.Context, arg SoftDeleteContactParams) (int64, error)
+	// Soft delete with optimistic locking: no row when the version moved on or the
+	// deal is missing or already deleted. Stage history is kept.
+	SoftDeleteDeal(ctx context.Context, arg SoftDeleteDealParams) (int64, error)
+	TransitionDeal(ctx context.Context, arg TransitionDealParams) (Deal, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (Contact, error)
+	// Optimistic locking (PRD 5.6): no row when the version moved on (or the deal is missing).
+	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)
 }
 
 var _ Querier = (*Queries)(nil)

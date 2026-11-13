@@ -16,6 +16,7 @@ import (
 // by the integration tests; here only the service's rules are under test.
 type fakeRepo struct {
 	rows      map[uuid.UUID]*fakeRow
+	openDeals map[uuid.UUID]bool // contact id -> has an open deal
 	lastQuery string
 	clock     time.Time
 }
@@ -27,7 +28,8 @@ type fakeRow struct {
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{rows: map[uuid.UUID]*fakeRow{}, clock: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	return &fakeRepo{rows: map[uuid.UUID]*fakeRow{}, openDeals: map[uuid.UUID]bool{},
+		clock: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 }
 
 func (f *fakeRepo) WithTenant(_ context.Context, tenantID uuid.UUID, fn func(Store) error) error {
@@ -81,10 +83,8 @@ func (s *fakeStore) List(_ context.Context, p ListParams) ([]Contact, error) {
 	return out[:min(len(out), p.Limit)], nil
 }
 
-type stubDeals struct{ open bool }
-
-func (d stubDeals) HasOpenDeals(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return d.open, nil
+func (s *fakeStore) HasOpenDeals(_ context.Context, id uuid.UUID) (bool, error) {
+	return s.f.openDeals[id], nil
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -95,7 +95,7 @@ var (
 )
 
 func TestCreate_DefaultsOwnerAndStoresBlankAsNull(t *testing.T) {
-	svc := NewService(newFakeRepo(), NoDeals{})
+	svc := NewService(newFakeRepo())
 
 	c, err := svc.Create(t.Context(), tenantID, callerID, CreateInput{
 		FullName: "Nguyễn Văn A", Email: ptr(""), Phone: ptr("  "), Company: ptr("Acme"),
@@ -109,7 +109,7 @@ func TestCreate_DefaultsOwnerAndStoresBlankAsNull(t *testing.T) {
 }
 
 func TestUpdate_IsPartial(t *testing.T) {
-	svc := NewService(newFakeRepo(), NoDeals{})
+	svc := NewService(newFakeRepo())
 	c, err := svc.Create(t.Context(), tenantID, callerID, CreateInput{
 		FullName: "An", Email: ptr("an@x.io"), Phone: ptr("0901"),
 	})
@@ -125,7 +125,7 @@ func TestUpdate_IsPartial(t *testing.T) {
 }
 
 func TestUpdate_NotFound(t *testing.T) {
-	svc := NewService(newFakeRepo(), NoDeals{})
+	svc := NewService(newFakeRepo())
 
 	_, err := svc.Update(t.Context(), tenantID, uuid.Must(uuid.NewV7()), UpdateInput{FullName: ptr("X")})
 
@@ -143,9 +143,11 @@ func TestDelete(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(newFakeRepo(), stubDeals{open: tt.openDeals})
+			repo := newFakeRepo()
+			svc := NewService(repo)
 			c, err := svc.Create(t.Context(), tenantID, callerID, CreateInput{FullName: "An"})
 			require.NoError(t, err)
+			repo.openDeals[c.ID] = tt.openDeals
 
 			err = svc.Delete(t.Context(), tenantID, c.ID)
 
@@ -165,7 +167,7 @@ func TestDelete(t *testing.T) {
 
 func TestList_HasMoreAndEscapesQuery(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, NoDeals{})
+	svc := NewService(repo)
 	for _, name := range []string{"An", "Bình", "Chi"} {
 		_, err := svc.Create(t.Context(), tenantID, callerID, CreateInput{FullName: name})
 		require.NoError(t, err)

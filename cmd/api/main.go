@@ -16,6 +16,7 @@ import (
 	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/config"
 	"github.com/HieuTrannn/crm-backend/internal/contact"
+	"github.com/HieuTrannn/crm-backend/internal/deal"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 	"github.com/HieuTrannn/crm-backend/internal/platform/logger"
 	"github.com/HieuTrannn/crm-backend/internal/server"
@@ -64,11 +65,11 @@ func run() error {
 	authHandler := auth.NewHandler(authSvc, tokens, cfg.AppEnv == config.EnvProduction)
 
 	db := database.New(pool)
-	// TODO(deal): pass the deal module's checker instead of NoDeals.
-	contactHandler := contact.NewHandler(contact.NewService(contact.NewPostgresRepository(db), contact.NoDeals{}),
-		auth.RequireAuth(tokens))
+	requireAuth := auth.RequireAuth(tokens)
+	contactHandler := contact.NewHandler(contact.NewService(contact.NewPostgresRepository(db)), requireAuth)
+	dealHandler := deal.NewHandler(deal.NewService(deal.NewPostgresRepository(db)), requireAuth)
 
-	router := server.NewRouter(log, pool, authHandler, contactHandler)
+	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler)
 	docs := cfg.AppEnv == config.EnvDevelopment
 	if docs {
 		// Path is relative to the repo root, where `go run ./cmd/api` is started.

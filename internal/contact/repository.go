@@ -73,6 +73,14 @@ func (s *store) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (s *store) HasOpenDeals(ctx context.Context, id uuid.UUID) (bool, error) {
+	open, err := s.q.ContactHasOpenDeals(ctx, sqlc.ContactHasOpenDealsParams{TenantID: s.tenantID, ContactID: id})
+	if err != nil {
+		return false, fmt.Errorf("check open deals: %w", err)
+	}
+	return open, nil
+}
+
 func (s *store) List(ctx context.Context, p ListParams) ([]Contact, error) {
 	var rows []sqlc.Contact
 	var err error
