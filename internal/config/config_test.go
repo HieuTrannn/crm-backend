@@ -10,8 +10,9 @@ import (
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("PORT", "")
-	t.Setenv("APP_ENV", "")
+	for _, k := range []string{"PORT", "APP_ENV", "HTTPS_PORT", "TLS_CERT_FILE", "TLS_KEY_FILE"} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("DATABASE_URL", "postgres://app@localhost/crm")
 	t.Setenv("MIGRATION_DATABASE_URL", "postgres://owner@localhost/crm")
 	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
@@ -43,6 +44,17 @@ func TestLoad_Invalid(t *testing.T) {
 			name:     "short jwt secret",
 			env:      map[string]string{"JWT_SECRET": "short"},
 			wantErrs: []string{"JWT_SECRET must be at least 32 bytes"},
+		},
+		{
+			name:     "tls cert without key",
+			env:      map[string]string{"TLS_CERT_FILE": "certs/localhost.pem"},
+			wantErrs: []string{"TLS_CERT_FILE and TLS_KEY_FILE must be set together"},
+		},
+		{
+			name: "https port equals http port",
+			env: map[string]string{"TLS_CERT_FILE": "c.pem", "TLS_KEY_FILE": "c.key",
+				"PORT": "8080", "HTTPS_PORT": "8080"},
+			wantErrs: []string{"HTTPS_PORT must differ from PORT"},
 		},
 		{
 			name:     "unknown app env",

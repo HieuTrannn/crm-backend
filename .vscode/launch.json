@@ -1,0 +1,30 @@
+{
+  // VS Code debug profiles (the Go counterpart of ASP.NET's launchSettings.json).
+  // Run with F5 or the "Run and Debug" panel; needs the Go extension (it installs Delve).
+  // Both profiles read .env; "env" values override it.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (http)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/api",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "API (http + https)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/api",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "TLS_CERT_FILE": "certs/localhost.pem",
+        "TLS_KEY_FILE": "certs/localhost.key"
+      }
+    }
+  ]
+}

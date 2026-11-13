@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -64,41 +63,39 @@ func run() error {
 	authHandler := auth.NewHandler(authSvc, tokens, cfg.AppEnv == config.EnvProduction)
 
 	router := server.NewRouter(log, pool, authHandler)
-	if cfg.AppEnv == config.EnvDevelopment {
+	docs := cfg.AppEnv == config.EnvDevelopment
+	if docs {
 		// Path is relative to the repo root, where `go run ./cmd/api` is started.
 		server.MountDocs(router, "api/openapi.yaml")
-		log.Info("swagger ui enabled", slog.String("url", "http://localhost:"+cfg.Port+"/docs"))
 	}
 
-	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second, // guards against Slowloris
+	listeners := []server.Listener{{Server: newHTTPServer(cfg.Port, router)}}
+	urls := []string{"http://localhost:" + cfg.Port}
+	if cfg.HTTPSEnabled() {
+		listeners = append(listeners, server.Listener{
+			Server: newHTTPServer(cfg.HTTPSPort, router), CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile,
+		})
+		urls = append(urls, "https://localhost:"+cfg.HTTPSPort)
 	}
-
-	// ListenAndServe blocks, so it runs in its own goroutine while main waits for a signal.
-	errCh := make(chan error, 1)
-	go func() {
-		log.Info("http server listening", slog.String("addr", srv.Addr), slog.String("env", cfg.AppEnv))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+	// Logged last so it is not buried under gin's route listing.
+	for _, u := range urls {
+		log.Info("listening on "+u, slog.String("env", cfg.AppEnv))
+		if docs {
+			log.Info("swagger ui: " + u + "/docs")
 		}
-		close(errCh)
-	}()
-
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("http server: %w", err)
-	case <-ctx.Done():
-		log.Info("shutdown signal received, draining requests", slog.Duration("timeout", shutdownTimeout))
 	}
 
-	// ctx is already cancelled, so the shutdown deadline needs a fresh parent.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("graceful shutdown: %w", err)
+	if err := server.Serve(ctx, log, shutdownTimeout, listeners...); err != nil {
+		return err
 	}
 	log.Info("server stopped cleanly")
 	return nil
+}
+
+func newHTTPServer(port string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second, // guards against Slowloris
+	}
 }

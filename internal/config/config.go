@@ -19,7 +19,12 @@ const minJWTSecretLen = 32
 
 // Config holds all settings read from the environment.
 type Config struct {
-	Port                 string
+	Port string
+	// HTTPS is optional and meant for local development; in production the
+	// platform (Render) terminates TLS in front of the plain HTTP port.
+	HTTPSPort            string
+	TLSCertFile          string
+	TLSKeyFile           string
 	AppEnv               string
 	DatabaseURL          string
 	MigrationDatabaseURL string
@@ -37,6 +42,9 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Port:                 getenv("PORT", "8080"),
+		HTTPSPort:            getenv("HTTPS_PORT", "8443"),
+		TLSCertFile:          os.Getenv("TLS_CERT_FILE"),
+		TLSKeyFile:           os.Getenv("TLS_KEY_FILE"),
 		AppEnv:               getenv("APP_ENV", EnvDevelopment),
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
 		MigrationDatabaseURL: os.Getenv("MIGRATION_DATABASE_URL"),
@@ -61,6 +69,13 @@ func Load() (Config, error) {
 		errs = append(errs, fmt.Errorf("JWT_SECRET must be at least %d bytes", minJWTSecretLen))
 	}
 
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		errs = append(errs, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be set together"))
+	}
+	if cfg.HTTPSEnabled() && cfg.HTTPSPort == cfg.Port {
+		errs = append(errs, errors.New("HTTPS_PORT must differ from PORT"))
+	}
+
 	switch cfg.AppEnv {
 	case EnvDevelopment, EnvTest, EnvProduction:
 	default:
@@ -72,6 +87,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid config:\n%w", err)
 	}
 	return cfg, nil
+}
+
+// HTTPSEnabled reports whether a certificate is configured for the HTTPS listener.
+func (c Config) HTTPSEnabled() bool {
+	return c.TLSCertFile != "" && c.TLSKeyFile != ""
 }
 
 // getenv returns the environment variable or fallback when it is unset or empty.

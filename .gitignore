@@ -3,3 +3,5 @@ bin/
 tmp/
 *.exe
 coverage.*
+# Local TLS certificates and private keys
+certs/
