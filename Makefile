@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: run test test-integration lint migrate-up migrate-down sqlc db-up db-down
+.PHONY: run test test-integration lint migrate-up migrate-down sqlc seed db-up db-down
 
 run:
 	go run ./cmd/api
@@ -35,3 +35,8 @@ db-up:
 
 db-down:
 	docker compose down
+
+# Creates a demo tenant and its owner from the SEED_OWNER_* variables in .env.
+# Safe to run again: an existing account is left untouched. Run migrate-up first.
+seed:
+	go run ./cmd/seed
