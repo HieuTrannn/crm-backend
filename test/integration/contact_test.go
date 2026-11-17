@@ -19,11 +19,12 @@ import (
 
 	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/contact"
+	"github.com/HieuTrannn/crm-backend/internal/dashboard"
 	"github.com/HieuTrannn/crm-backend/internal/deal"
 	"github.com/HieuTrannn/crm-backend/internal/server"
 )
 
-// apiEnv is a router with the contact and deal modules over a migrated database
+// apiEnv is a router with the contact, deal and dashboard modules over a migrated database
 // with two seeded tenants, plus an access cookie for each tenant's owner.
 type apiEnv struct {
 	h       http.Handler
@@ -41,7 +42,8 @@ func newAPIEnv(t *testing.T) apiEnv {
 	requireAuth := auth.RequireAuth(tokens)
 	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app,
 		contact.NewHandler(contact.NewService(contact.NewPostgresRepository(e.db)), requireAuth),
-		deal.NewHandler(deal.NewService(deal.NewPostgresRepository(e.db)), requireAuth))
+		deal.NewHandler(deal.NewService(deal.NewPostgresRepository(e.db)), requireAuth),
+		dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(e.db)), requireAuth))
 	cookie := func(user, tenant uuid.UUID) *http.Cookie {
 		tok, _, err := tokens.Issue(auth.Principal{UserID: user, TenantID: tenant, Role: auth.RoleOwner}, time.Now())
 		require.NoError(t, err)

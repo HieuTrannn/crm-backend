@@ -40,6 +40,13 @@ type Querier interface {
 	// deletion takes FOR UPDATE on the same row, so creating a deal and deleting its
 	// contact cannot interleave.
 	LockLiveContact(ctx context.Context, arg LockLiveContactParams) (uuid.UUID, error)
+	// FR-DASH-02: won revenue and win rate per month, for the 6 calendar months in
+	// Asia/Ho_Chi_Minh ending with the month of as_of. Months without deals are 0.
+	MonthlySales(ctx context.Context, arg MonthlySalesParams) ([]MonthlySalesRow, error)
+	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
+	// FR-DASH-01: count and total amount per stage in ONE query. Every stage is
+	// listed even without deals, in pipeline order. Uses deals_tenant_stage_idx.
+	PipelineSummary(ctx context.Context, tenantID uuid.UUID) ([]PipelineSummaryRow, error)
 	// Revokes one token only if it is still active; 0 rows means someone already used it.
 	RevokeRefreshToken(ctx context.Context, arg RevokeRefreshTokenParams) (int64, error)
 	RevokeRefreshTokenFamily(ctx context.Context, arg RevokeRefreshTokenFamilyParams) error

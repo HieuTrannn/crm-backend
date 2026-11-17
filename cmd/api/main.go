@@ -16,6 +16,7 @@ import (
 	"github.com/HieuTrannn/crm-backend/internal/auth"
 	"github.com/HieuTrannn/crm-backend/internal/config"
 	"github.com/HieuTrannn/crm-backend/internal/contact"
+	"github.com/HieuTrannn/crm-backend/internal/dashboard"
 	"github.com/HieuTrannn/crm-backend/internal/deal"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 	"github.com/HieuTrannn/crm-backend/internal/platform/logger"
@@ -68,8 +69,9 @@ func run() error {
 	requireAuth := auth.RequireAuth(tokens)
 	contactHandler := contact.NewHandler(contact.NewService(contact.NewPostgresRepository(db)), requireAuth)
 	dealHandler := deal.NewHandler(deal.NewService(deal.NewPostgresRepository(db)), requireAuth)
+	dashboardHandler := dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(db)), requireAuth)
 
-	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler)
+	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler, dashboardHandler)
 	docs := cfg.AppEnv == config.EnvDevelopment
 	if docs {
 		// Path is relative to the repo root, where `go run ./cmd/api` is started.

@@ -15,6 +15,8 @@ tags:
     description: Customers of the tenant (FR-CON-01..04)
   - name: Deals
     description: Sales pipeline (FR-DEAL-01..05)
+  - name: Dashboard
+    description: Pipeline and monthly sales figures (FR-DASH-01, 02)
 paths:
   /healthz:
     get:
@@ -496,6 +498,57 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/dashboard/pipeline:
+    get:
+      tags: [Dashboard]
+      summary: Number and total amount of live deals per stage (FR-DASH-01)
+      description: Always returns the five stages in pipeline order; empty stages have zeros.
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StageSummary"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /api/v1/dashboard/monthly:
+    get:
+      tags: [Dashboard]
+      summary: Won revenue and win rate for the last 6 months (FR-DASH-02)
+      description: |
+        Calendar months in Asia/Ho_Chi_Minh, oldest first, ending with the current
+        month. A deal counts in the month of its closed_at. Months without closed
+        deals are returned with zeros.
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    minItems: 6
+                    maxItems: 6
+                    items:
+                      $ref: "#/components/schemas/MonthSummary"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -739,3 +792,21 @@ components:
         reason: { type: [string, "null"], description: lost_reason or reopen_reason of the change }
         changed_by: { type: string, format: uuid }
         changed_at: { type: string, format: date-time }
+
+    StageSummary:
+      type: object
+      required: [stage, deal_count, total_amount]
+      properties:
+        stage: { $ref: "#/components/schemas/Stage" }
+        deal_count: { type: integer, format: int64 }
+        total_amount: { type: integer, format: int64, description: Whole VND }
+
+    MonthSummary:
+      type: object
+      required: [month, won_count, lost_count, won_amount, win_rate]
+      properties:
+        month: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$", example: "2026-11" }
+        won_count: { type: integer, format: int64 }
+        lost_count: { type: integer, format: int64 }
+        won_amount: { type: integer, format: int64, description: Revenue of deals won that month, whole VND }
+        win_rate: { type: number, minimum: 0, maximum: 1, description: "won / (won + lost); 0 when nothing closed" }
