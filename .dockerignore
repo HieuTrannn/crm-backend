@@ -1,0 +1,11 @@
+.git
+.github
+.vscode
+.env
+certs/
+tmp/
+bin/
+*.exe
+*.csv
+*.pprof
+docs/

@@ -1,6 +1,6 @@
 # Hiệu năng (NFR-PERF-01, 02, 03)
 
-Phần 1: truy vấn contacts. Phần 2: [import CSV 100.000 dòng](#import-csv-100000-dòng-nfr-perf-02).
+Phần 1: truy vấn contacts. Phần 2: [import CSV 100.000 dòng](#import-csv-100000-dòng-nfr-perf-02). Phần 3: [load test k6](#load-test-api-đọc-nfr-perf-01).
 
 ## Truy vấn contacts (NFR-PERF-01, NFR-PERF-03)
 
@@ -271,3 +271,33 @@ Tổng cấp phát là 263 MB, nhưng heap đang dùng chỉ tăng ~5 MB. Lý do
 
 Đo "RAM tăng bao nhiêu" thì dùng `HeapInuse`/`Sys` lấy mẫu trong lúc chạy (benchmark lấy mẫu 20 ms/lần);
 `alloc_space` lớn không có nghĩa là tốn RAM, chỉ có nghĩa là GC phải làm việc nhiều.
+
+## Load test API đọc (NFR-PERF-01)
+
+Đo ngày 2026-11-17 bằng `make loadtest` (k6 0.54, mọi thành phần trong Docker Compose trên cùng máy dev,
+12 CPU). Dữ liệu: tenant Acme Demo với 100.000 contact; 200 tài khoản `loadtest-NNN@acme.demo`, mỗi VU
+của k6 dùng một tài khoản nên rate limit 100 request/phút/user vẫn bật.
+
+Kịch bản: tăng từ 10 lên 200 request/giây trong 60 giây, giữ 200 request/giây trong 60 giây. Request đọc
+chia đều cho 4 loại: danh sách contact (trang đầu, 20 dòng), tìm kiếm `q=nguyen`, xem một deal,
+dashboard pipeline.
+
+```
+✓ checks.........................: 100.00% 18299 out of 18299
+  http_req_duration..............: avg=3.46ms  med=1ms  p(90)=1.33ms  p(95)=1.48ms  p(99)=216.73ms  max=241.1ms
+  ✓ { kind:read }................: avg=1.04ms  med=1ms  p(90)=1.31ms  p(95)=1.43ms  p(99)=1.74ms    max=26ms
+  http_req_failed................: 0.00%   0 out of 18502
+  http_reqs......................: 18502   153.9/s (trung bình cả lần chạy, gồm 60 giây tăng dần; đỉnh 200/s)
+```
+
+| Chỉ số | Kết quả | Yêu cầu |
+| --- | --- | --- |
+| p(95) request đọc | **1,43 ms** | < 100 ms ✅ |
+| Tỷ lệ lỗi request đọc | **0%** (không có 429) | < 1% ✅ |
+| RAM container API sau khi chạy | 16 MB | — |
+
+- Dòng `http_req_duration` tổng có p(99) ~217 ms là **203 lần đăng nhập** (bcrypt cost 12, chậm có chủ đích),
+  được gắn tag `kind:login` và loại khỏi ngưỡng.
+- `q=nguyen` là từ phổ biến (~10% contact), nên Postgres đi theo index `created_at` và dừng sau 21 kết quả.
+  Tìm từ hiếm phải lọc cả tenant (~19 ms, xem phần EXPLAIN ở trên); kịch bản này chưa gồm trường hợp đó.
+- k6, API và PostgreSQL chạy chung một máy, nên số đo là cận trên của độ trễ phía server, không phải số production.
