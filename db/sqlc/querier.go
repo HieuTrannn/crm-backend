@@ -11,28 +11,44 @@ import (
 )
 
 type Querier interface {
+	// Progress is updated once per batch, in the batch's transaction.
+	AddImportProgress(ctx context.Context, arg AddImportProgressParams) error
 	// Open = not won and not lost. Runs in the soft-delete transaction after the
 	// contact row is locked FOR UPDATE (FR-CON-04).
 	ContactHasOpenDeals(ctx context.Context, arg ContactHasOpenDealsParams) (bool, error)
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
 	CreateContact(ctx context.Context, arg CreateContactParams) (Contact, error)
 	CreateDeal(ctx context.Context, arg CreateDealParams) (Deal, error)
+	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
+	CreateImportJob(ctx context.Context, arg CreateImportJobParams) (ImportJob, error)
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) error
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
 	CreateTenant(ctx context.Context, arg CreateTenantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) error
+	// Only a job that has not ended yet can be finished.
+	FinishImportJob(ctx context.Context, arg FinishImportJobParams) error
 	GetContact(ctx context.Context, arg GetContactParams) (Contact, error)
 	// Locks the row for a read-modify-write update in the same transaction.
 	GetContactForUpdate(ctx context.Context, arg GetContactForUpdateParams) (Contact, error)
 	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
+	GetImportJob(ctx context.Context, arg GetImportJobParams) (ImportJob, error)
 	GetRefreshTokenByHash(ctx context.Context, arg GetRefreshTokenByHashParams) (GetRefreshTokenByHashRow, error)
 	GetUserWithTenant(ctx context.Context, arg GetUserWithTenantParams) (GetUserWithTenantRow, error)
+	InsertImportErrors(ctx context.Context, arg InsertImportErrorsParams) error
+	// Batch insert (FR-IMP-02). COPY cannot be used: PostgreSQL rejects COPY FROM
+	// into a table with row-level security. Several unnest() in one SELECT list are
+	// zipped row by row (PostgreSQL 10+). Empty strings become NULL. A row whose
+	// email already exists among live contacts (or earlier in the same batch) is
+	// skipped and its id is missing from the result.
+	InsertImportedContacts(ctx context.Context, arg InsertImportedContactsParams) ([]uuid.UUID, error)
 	InsertStageHistory(ctx context.Context, arg InsertStageHistoryParams) error
 	// Keyset pagination: rows strictly after the cursor (created_at, id), newest first.
 	// The first page passes a cursor beyond any real row. Uses contacts_tenant_created_idx.
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]Contact, error)
 	// Optional filters are NULL when absent (FR-DEAL-05). Keyset pagination as for contacts.
 	ListDeals(ctx context.Context, arg ListDealsParams) ([]Deal, error)
+	// Keyset on the line number (FR-IMP-04).
+	ListImportErrors(ctx context.Context, arg ListImportErrorsParams) ([]ListImportErrorsRow, error)
 	// Oldest first; id breaks ties within one transaction. Uses deal_stage_history_deal_idx.
 	ListStageHistory(ctx context.Context, arg ListStageHistoryParams) ([]ListStageHistoryRow, error)
 	// Every query filters by tenant_id explicitly (layer 1); RLS is layer 2.
@@ -57,6 +73,7 @@ type Querier interface {
 	// Soft delete with optimistic locking: no row when the version moved on or the
 	// deal is missing or already deleted. Stage history is kept.
 	SoftDeleteDeal(ctx context.Context, arg SoftDeleteDealParams) (int64, error)
+	StartImportJob(ctx context.Context, arg StartImportJobParams) error
 	TransitionDeal(ctx context.Context, arg TransitionDealParams) (Deal, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (Contact, error)
 	// Optimistic locking (PRD 5.6): no row when the version moved on (or the deal is missing).

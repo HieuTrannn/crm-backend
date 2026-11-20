@@ -43,7 +43,7 @@ type env struct {
 
 // setup starts Postgres, runs the migration up/down/up as a non-superuser owner,
 // and connects as app_user, mirroring production roles.
-func setup(t *testing.T) env {
+func setup(t testing.TB) env {
 	t.Helper()
 	ctx := t.Context()
 
@@ -89,7 +89,7 @@ func setup(t *testing.T) env {
 }
 
 // runMigrations applies up, down, up so the Down section is exercised too.
-func runMigrations(t *testing.T, dsn string) {
+func runMigrations(t testing.TB, dsn string) {
 	t.Helper()
 	sqlDB, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func runMigrations(t *testing.T, dsn string) {
 	require.NoError(t, err, "up again")
 }
 
-func withUser(t *testing.T, dsn, user, password string) string {
+func withUser(t testing.TB, dsn, user, password string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ type seeded struct {
 }
 
 // seed inserts one tenant, owner user and refresh token per tenant through app_user.
-func seed(t *testing.T, e env) seeded {
+func seed(t testing.TB, e env) seeded {
 	t.Helper()
 	ctx := t.Context()
 	s := seeded{tenantA: uuid.Must(uuid.NewV7()), tenantB: uuid.Must(uuid.NewV7()),

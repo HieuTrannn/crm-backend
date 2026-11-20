@@ -53,6 +53,27 @@ type DealStageHistory struct {
 	ChangedAt time.Time `json:"changed_at"`
 }
 
+type ImportJob struct {
+	ID            uuid.UUID  `json:"id"`
+	TenantID      uuid.UUID  `json:"tenant_id"`
+	CreatedBy     uuid.UUID  `json:"created_by"`
+	Status        string     `json:"status"`
+	TotalRows     int32      `json:"total_rows"`
+	ProcessedRows int32      `json:"processed_rows"`
+	SuccessRows   int32      `json:"success_rows"`
+	ErrorRows     int32      `json:"error_rows"`
+	FailureReason *string    `json:"failure_reason"`
+	CreatedAt     time.Time  `json:"created_at"`
+	FinishedAt    *time.Time `json:"finished_at"`
+}
+
+type ImportJobError struct {
+	JobID     uuid.UUID `json:"job_id"`
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RowNumber int32     `json:"row_number"`
+	Reason    string    `json:"reason"`
+}
+
 type RefreshToken struct {
 	ID        uuid.UUID  `json:"id"`
 	UserID    uuid.UUID  `json:"user_id"`

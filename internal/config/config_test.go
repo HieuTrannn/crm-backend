@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"PORT", "APP_ENV", "HTTPS_PORT", "TLS_CERT_FILE", "TLS_KEY_FILE"} {
+	for _, k := range []string{"PORT", "APP_ENV", "HTTPS_PORT", "TLS_CERT_FILE", "TLS_KEY_FILE", "IMPORT_WORKERS"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://app@localhost/crm")
@@ -27,6 +28,7 @@ func TestLoad_ValidUsesDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "8080", cfg.Port)
 	assert.Equal(t, EnvDevelopment, cfg.AppEnv)
+	assert.Equal(t, runtime.NumCPU(), cfg.ImportWorkers, "IMPORT_WORKERS defaults to the CPU count")
 }
 
 func TestLoad_Invalid(t *testing.T) {
@@ -55,6 +57,11 @@ func TestLoad_Invalid(t *testing.T) {
 			env: map[string]string{"TLS_CERT_FILE": "c.pem", "TLS_KEY_FILE": "c.key",
 				"PORT": "8080", "HTTPS_PORT": "8080"},
 			wantErrs: []string{"HTTPS_PORT must differ from PORT"},
+		},
+		{
+			name:     "import workers not a positive integer",
+			env:      map[string]string{"IMPORT_WORKERS": "0"},
+			wantErrs: []string{"IMPORT_WORKERS must be a positive integer"},
 		},
 		{
 			name:     "unknown app env",

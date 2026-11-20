@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"strconv"
 )
 
 // Allowed values for APP_ENV.
@@ -30,6 +32,8 @@ type Config struct {
 	MigrationDatabaseURL string
 	JWTSecret            string
 	FrontendOrigin       string
+	// ImportWorkers is the number of CSV validation workers per import job.
+	ImportWorkers int
 }
 
 // Load reads and validates the environment (after loading .env, if present). It reports every problem at once
@@ -53,6 +57,15 @@ func Load() (Config, error) {
 	}
 
 	var errs []error
+	cfg.ImportWorkers = runtime.NumCPU()
+	if s := os.Getenv("IMPORT_WORKERS"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			errs = append(errs, errors.New("IMPORT_WORKERS must be a positive integer"))
+		}
+		cfg.ImportWorkers = n
+	}
+
 	required := []struct{ name, value string }{
 		{"DATABASE_URL", cfg.DatabaseURL},
 		{"MIGRATION_DATABASE_URL", cfg.MigrationDatabaseURL},

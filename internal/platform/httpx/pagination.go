@@ -65,15 +65,8 @@ func DecodeCursor(s string) (Cursor, error) {
 // PageParams reads ?limit= (default 20, max 100) and ?cursor= (absent: first page).
 // On invalid input it writes a 400 VALIDATION_ERROR and returns ok=false.
 func PageParams(c *gin.Context) (limit int, after Cursor, ok bool) {
-	limit = DefaultLimit
-	if s := c.Query("limit"); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < 1 || n > MaxLimit {
-			WriteErrorDetails(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid query parameters",
-				map[string]string{"limit": "integer between 1 and 100"})
-			return 0, Cursor{}, false
-		}
-		limit = n
+	if limit, ok = LimitParam(c); !ok {
+		return 0, Cursor{}, false
 	}
 	after = FirstPage()
 	if s := c.Query("cursor"); s != "" {
@@ -86,6 +79,22 @@ func PageParams(c *gin.Context) (limit int, after Cursor, ok bool) {
 		after = cur
 	}
 	return limit, after, true
+}
+
+// LimitParam reads ?limit= (default 20, max 100), for lists with their own
+// cursor format. On invalid input it writes a 400 and returns ok=false.
+func LimitParam(c *gin.Context) (int, bool) {
+	s := c.Query("limit")
+	if s == "" {
+		return DefaultLimit, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > MaxLimit {
+		WriteErrorDetails(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid query parameters",
+			map[string]string{"limit": "integer between 1 and 100"})
+		return 0, false
+	}
+	return n, true
 }
 
 // Page is the list response shape: {"data": [...], "next_cursor": "..." | null}.

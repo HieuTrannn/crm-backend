@@ -18,6 +18,7 @@ import (
 	"github.com/HieuTrannn/crm-backend/internal/contact"
 	"github.com/HieuTrannn/crm-backend/internal/dashboard"
 	"github.com/HieuTrannn/crm-backend/internal/deal"
+	"github.com/HieuTrannn/crm-backend/internal/importer"
 	"github.com/HieuTrannn/crm-backend/internal/platform/database"
 	"github.com/HieuTrannn/crm-backend/internal/platform/logger"
 	"github.com/HieuTrannn/crm-backend/internal/server"
@@ -70,8 +71,11 @@ func run() error {
 	contactHandler := contact.NewHandler(contact.NewService(contact.NewPostgresRepository(db)), requireAuth)
 	dealHandler := deal.NewHandler(deal.NewService(deal.NewPostgresRepository(db)), requireAuth)
 	dashboardHandler := dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(db)), requireAuth)
+	importJobs := importer.NewJobManager()
+	importHandler := importer.NewHandler(
+		importer.NewService(importer.NewPostgresRepository(db), importJobs, cfg.ImportWorkers, log), requireAuth)
 
-	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler, dashboardHandler)
+	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler, dashboardHandler, importHandler)
 	docs := cfg.AppEnv == config.EnvDevelopment
 	if docs {
 		// Path is relative to the repo root, where `go run ./cmd/api` is started.
@@ -94,8 +98,18 @@ func run() error {
 		}
 	}
 
-	if err := server.Serve(ctx, log, shutdownTimeout, listeners...); err != nil {
-		return err
+	serveErr := server.Serve(ctx, log, shutdownTimeout, listeners...)
+
+	// No request can start an import any more. Give running imports the same
+	// window to finish, then cancel them; the deferred pool.Close runs after.
+	jobsCtx, cancelJobs := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelJobs()
+	if err := importJobs.Shutdown(jobsCtx); err != nil {
+		log.Warn("import jobs cancelled at shutdown", slog.Any("error", err))
+	}
+
+	if serveErr != nil {
+		return serveErr
 	}
 	log.Info("server stopped cleanly")
 	return nil

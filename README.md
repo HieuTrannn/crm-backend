@@ -123,6 +123,7 @@ curl localhost:8080/readyz    # {"status":"ok"}  database is reachable (503 othe
 | `make lint` | golangci-lint |
 | `make migrate-up` / `make migrate-down` | Apply all / roll back one migration |
 | `make sqlc` | Generate Go code from `db/queries` (runs sqlc in Docker) |
+| `go run ./cmd/gencsv -n 100000 -o contacts.csv` | Generate a contacts CSV for import tests (5% invalid rows on purpose) |
 | `make seed` | Create a demo tenant and its owner from the `SEED_OWNER_*` variables (idempotent); without make: `go run ./cmd/seed` |
 | `make db-up` / `make db-down` | Start / stop PostgreSQL in Docker |
 
