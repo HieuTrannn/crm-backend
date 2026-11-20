@@ -59,15 +59,20 @@ func run() error {
 
 	tokens := auth.NewTokenIssuer(cfg.JWTSecret)
 	// NFR-SEC-02: 5 failed logins per 15 minutes per IP + email.
-	limiter := auth.NewMemoryLimiter(5, 3*time.Minute)
-	authSvc, err := auth.NewService(auth.NewPostgresRepository(database.New(pool), pool), tokens, limiter, auth.BcryptCost)
+	loginLimiter := auth.NewMemoryLimiter(5, 3*time.Minute)
+	// NFR-SEC-02: 100 requests per minute per user, on every authenticated route.
+	apiLimiter := auth.NewMemoryLimiter(100, 600*time.Millisecond)
+	// OWASP API6: 10 sign-ups per hour per IP.
+	registerLimiter := auth.NewMemoryLimiter(10, 6*time.Minute)
+	authSvc, err := auth.NewService(auth.NewPostgresRepository(database.New(pool), pool), tokens, loginLimiter, auth.BcryptCost)
 	if err != nil {
 		return fmt.Errorf("init auth: %w", err)
 	}
-	authHandler := auth.NewHandler(authSvc, tokens, cfg.AppEnv == config.EnvProduction)
+	requireAuth := auth.RequireAuth(tokens, apiLimiter)
+	production := cfg.AppEnv == config.EnvProduction
+	authHandler := auth.NewHandler(authSvc, requireAuth, registerLimiter, production)
 
 	db := database.New(pool)
-	requireAuth := auth.RequireAuth(tokens)
 	contactHandler := contact.NewHandler(contact.NewService(contact.NewPostgresRepository(db)), requireAuth)
 	dealHandler := deal.NewHandler(deal.NewService(deal.NewPostgresRepository(db)), requireAuth)
 	dashboardHandler := dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(db)), requireAuth)
@@ -75,7 +80,8 @@ func run() error {
 	importHandler := importer.NewHandler(
 		importer.NewService(importer.NewPostgresRepository(db), importJobs, cfg.ImportWorkers, log), requireAuth)
 
-	router := server.NewRouter(log, pool, authHandler, contactHandler, dealHandler, dashboardHandler, importHandler)
+	router := server.NewRouter(log, pool, server.Options{FrontendOrigin: cfg.FrontendOrigin, HSTS: production},
+		authHandler, contactHandler, dealHandler, dashboardHandler, importHandler)
 	docs := cfg.AppEnv == config.EnvDevelopment
 	if docs {
 		// Path is relative to the repo root, where `go run ./cmd/api` is started.
@@ -120,5 +126,8 @@ func newHTTPServer(port string, h http.Handler) *http.Server {
 		Addr:              ":" + port,
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second, // guards against Slowloris
+		// OWASP API4: bound slow clients. ReadTimeout covers a 20 MB upload at ~1.5 Mbit/s.
+		ReadTimeout: 2 * time.Minute,
+		IdleTimeout: 2 * time.Minute,
 	}
 }

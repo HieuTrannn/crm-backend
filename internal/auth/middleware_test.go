@@ -20,7 +20,7 @@ func TestRequireAuth(t *testing.T) {
 
 	var seen Principal
 	r := gin.New()
-	r.GET("/x", RequireAuth(issuer), func(c *gin.Context) {
+	r.GET("/x", RequireAuth(issuer, nil), func(c *gin.Context) {
 		seen, _ = PrincipalFrom(c.Request.Context())
 		c.Status(http.StatusOK)
 	})
@@ -46,4 +46,26 @@ func TestRequireAuth(t *testing.T) {
 		})
 	}
 	assert.Equal(t, p, seen)
+}
+
+func TestRequireAuth_RateLimitPerUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	issuer := NewTokenIssuer(testSecret)
+	r := gin.New()
+	r.GET("/x", RequireAuth(issuer, NewMemoryLimiter(2, time.Hour)), func(c *gin.Context) { c.Status(http.StatusOK) })
+	get := func(p Principal) int {
+		tok, _, err := issuer.Issue(p, time.Now())
+		require.NoError(t, err)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil)
+		req.AddCookie(&http.Cookie{Name: accessCookie, Value: tok})
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	alice, bob := testPrincipal(), testPrincipal()
+
+	assert.Equal(t, http.StatusOK, get(alice))
+	assert.Equal(t, http.StatusOK, get(alice))
+	assert.Equal(t, http.StatusTooManyRequests, get(alice), "third request in the window")
+	assert.Equal(t, http.StatusOK, get(bob), "the limit is per user")
 }

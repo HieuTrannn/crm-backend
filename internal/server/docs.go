@@ -31,6 +31,11 @@ const swaggerHTML = `<!doctype html>
 // request, so edits to the spec show up on reload without restarting.
 func MountDocs(r *gin.Engine, specPath string) {
 	r.GET("/docs", func(c *gin.Context) {
+		// The API-wide CSP forbids everything; this page needs the pinned CDN assets
+		// and its inline bootstrap script. Development only.
+		c.Header("Content-Security-Policy", "default-src 'none'; "+
+			"script-src https://cdn.jsdelivr.net 'unsafe-inline'; style-src https://cdn.jsdelivr.net 'unsafe-inline'; "+
+			"img-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; frame-ancestors 'none'")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(swaggerHTML))
 	})
 	r.GET("/docs/openapi.yaml", func(c *gin.Context) {

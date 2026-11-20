@@ -42,11 +42,11 @@ func newAPIEnv(t *testing.T) apiEnv {
 	e := setup(t)
 	s := seed(t, e)
 	tokens := auth.NewTokenIssuer(testJWTSecret)
-	requireAuth := auth.RequireAuth(tokens)
+	requireAuth := auth.RequireAuth(tokens, nil)
 	jobs := importer.NewJobManager()
 	// Registered after setup's cleanups, so it runs first: imports stop before the pool closes.
 	t.Cleanup(func() { _ = jobs.Shutdown(context.Background()) })
-	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app,
+	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app, server.Options{},
 		contact.NewHandler(contact.NewService(contact.NewPostgresRepository(e.db)), requireAuth),
 		deal.NewHandler(deal.NewService(deal.NewPostgresRepository(e.db)), requireAuth),
 		dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(e.db)), requireAuth),

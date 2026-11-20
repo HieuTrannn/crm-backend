@@ -20,25 +20,31 @@ const (
 
 // Handler exposes the auth endpoints.
 type Handler struct {
-	svc           *Service
-	tokens        *TokenIssuer
-	secureCookies bool
+	svc             *Service
+	requireAuth     gin.HandlerFunc
+	registerLimiter httpx.Limiter
+	secureCookies   bool
 }
 
-// NewHandler creates the handler. secureCookies is false only outside
-// production, where the API runs on plain http://localhost.
-func NewHandler(svc *Service, tokens *TokenIssuer, secureCookies bool) *Handler {
-	return &Handler{svc: svc, tokens: tokens, secureCookies: secureCookies}
+// NewHandler creates the handler. requireAuth is RequireAuth. registerLimiter
+// bounds sign-ups per client IP (nil: unlimited). secureCookies is false only
+// outside production, where the API runs on plain http://localhost.
+func NewHandler(svc *Service, requireAuth gin.HandlerFunc, registerLimiter httpx.Limiter, secureCookies bool) *Handler {
+	return &Handler{svc: svc, requireAuth: requireAuth, registerLimiter: registerLimiter, secureCookies: secureCookies}
 }
 
 // RegisterRoutes mounts the auth routes under the /api/v1 group.
 func (h *Handler) RegisterRoutes(api *gin.RouterGroup) {
 	g := api.Group("/auth")
-	g.POST("/register", h.register)
+	// Registration is unauthenticated, so it is limited per IP (OWASP API6:
+	// stops scripted mass sign-ups and email enumeration through 409s).
+	g.POST("/register", httpx.RateLimit(h.registerLimiter, func(c *gin.Context) string {
+		return "register:" + c.ClientIP()
+	}), h.register)
 	g.POST("/login", h.login)
 	g.POST("/refresh", h.refresh)
 	g.POST("/logout", h.logout)
-	api.GET("/me", RequireAuth(h.tokens), h.me)
+	api.GET("/me", h.requireAuth, h.me)
 }
 
 // ErrorRules implements server.Module.
