@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: run test test-integration lint migrate-up migrate-down sqlc seed db-up db-down
+.PHONY: run test test-integration lint migrate-up migrate-down sqlc seed db-up db-down loadtest
 
 run:
 	go run ./cmd/api
@@ -36,7 +36,15 @@ db-up:
 db-down:
 	docker compose down
 
-# Creates a demo tenant and its owner from the SEED_OWNER_* variables in .env.
+# FR-SYS-03: two demo tenants with sample data. Accounts use SEED_OWNER_PASSWORD.
+# Load test data: go run ./cmd/seed -users 200 -contacts 100000
 # Safe to run again: an existing account is left untouched. Run migrate-up first.
 seed:
 	go run ./cmd/seed
+
+# NFR-PERF-01: build the image, run postgres + migrate + seed + api + k6 in Docker,
+# then remove the containers. See test/k6/README.md.
+loadtest:
+	docker build -t crm-backend:local .
+	docker compose --profile loadtest run --rm k6; status=$$?; \
+	docker compose --profile loadtest down -v; exit $$status

@@ -1,6 +1,23 @@
+# Local development: `make db-up` starts only the postgres service.
+# Load test (NFR-PERF-01), everything in containers, nothing published on the host:
+#   docker build -t crm-backend:local .   (Compose v5 builds through Bake, which asks for extra privileges)
+#   docker compose --profile loadtest run --rm k6   (starts db, migrate, seed, api in order; exits with k6)
+#   docker compose --profile loadtest down -v
+# See test/k6/README.md.
+
+x-loadtest-env: &loadtest-env
+  APP_ENV: test # plain-HTTP cookies (not production), no Swagger UI
+  DATABASE_URL: postgres://app_user:loadtest-app@lt-db:5432/crm?sslmode=disable&pool_max_conns=20
+  MIGRATION_DATABASE_URL: postgres://crm:crm@lt-db:5432/crm?sslmode=disable
+  APP_USER_PASSWORD: loadtest-app
+  JWT_SECRET: loadtest-secret-only-for-local-containers-0123456789
+  FRONTEND_ORIGIN: http://localhost:3000
+  SEED_OWNER_PASSWORD: loadtest-password
+
 services:
   postgres:
     image: postgres:17
+    profiles: [dev]
     environment:
       POSTGRES_USER: crm
       POSTGRES_PASSWORD: crm
@@ -14,6 +31,59 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  lt-db:
+    image: postgres:17
+    profiles: [loadtest]
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: crm
+      POSTGRES_DB: crm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  lt-migrate:
+    image: crm-backend:local
+    profiles: [loadtest]
+    environment: *loadtest-env
+    entrypoint: ["/app/goose", "-dir", "/app/db/migrations", "postgres",
+                 "postgres://crm:crm@lt-db:5432/crm?sslmode=disable", "up"]
+    depends_on:
+      lt-db:
+        condition: service_healthy
+
+  lt-seed:
+    image: crm-backend:local
+    profiles: [loadtest]
+    environment: *loadtest-env
+    entrypoint: ["/app/seed", "-users", "200", "-contacts", "100000"]
+    depends_on:
+      lt-migrate:
+        condition: service_completed_successfully
+
+  lt-api:
+    image: crm-backend:local
+    profiles: [loadtest]
+    environment: *loadtest-env
+    depends_on:
+      lt-seed:
+        condition: service_completed_successfully
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: [loadtest]
+    command: ["run", "/scripts/load.js"]
+    environment:
+      BASE_URL: http://lt-api:8080
+      USERS: "200"
+      SEED_OWNER_PASSWORD: loadtest-password
+    volumes:
+      - ./test/k6:/scripts:ro
+    depends_on:
+      - lt-api
 
 volumes:
   pgdata:

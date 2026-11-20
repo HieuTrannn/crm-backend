@@ -30,8 +30,18 @@ type Module interface {
 	ErrorRules() []httpx.ErrorRule
 }
 
+// Options are the HTTP security settings that depend on the deployment.
+type Options struct {
+	// FrontendOrigin is the only browser origin allowed by CORS (FRONTEND_ORIGIN).
+	FrontendOrigin string
+	// HSTS sends Strict-Transport-Security; enable it in production only.
+	HSTS bool
+}
+
 // NewRouter builds the gin engine with shared middleware, system routes and modules.
-func NewRouter(log *slog.Logger, db Pinger, modules ...Module) *gin.Engine {
+// Middleware must be added here, before routes: gin does not apply middleware
+// added with Use to routes registered earlier.
+func NewRouter(log *slog.Logger, db Pinger, opts Options, modules ...Module) *gin.Engine {
 	useJSONFieldNames()
 
 	r := gin.New()
@@ -45,7 +55,9 @@ func NewRouter(log *slog.Logger, db Pinger, modules ...Module) *gin.Engine {
 	}
 	// Recover sits inside Logger so the log line records the final 500 status;
 	// Errors sits innermost so it sees what handlers attached with c.Error.
-	r.Use(httpx.RequestID(), httpx.Logger(log), httpx.Recover(log), httpx.Errors(log, rules...))
+	r.Use(httpx.RequestID(), httpx.Logger(log), httpx.Recover(log),
+		httpx.SecurityHeaders(opts.HSTS), httpx.CORS(opts.FrontendOrigin), httpx.LimitBody(),
+		httpx.Errors(log, rules...))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

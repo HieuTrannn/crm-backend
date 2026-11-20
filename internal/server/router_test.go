@@ -21,7 +21,7 @@ func (f fakePinger) Ping(context.Context) error { return f.err }
 
 func newTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	return NewRouter(slog.New(slog.DiscardHandler), fakePinger{})
+	return NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, Options{})
 }
 
 func TestDocs(t *testing.T) {

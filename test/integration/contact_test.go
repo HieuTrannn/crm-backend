@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,11 +22,13 @@ import (
 	"github.com/HieuTrannn/crm-backend/internal/contact"
 	"github.com/HieuTrannn/crm-backend/internal/dashboard"
 	"github.com/HieuTrannn/crm-backend/internal/deal"
+	"github.com/HieuTrannn/crm-backend/internal/importer"
 	"github.com/HieuTrannn/crm-backend/internal/server"
 )
 
-// apiEnv is a router with the contact, deal and dashboard modules over a migrated database
-// with two seeded tenants, plus an access cookie for each tenant's owner.
+// apiEnv is a router with the contact, deal, dashboard and importer modules over
+// a migrated database with two seeded tenants, plus an access cookie for each
+// tenant's owner.
 type apiEnv struct {
 	h       http.Handler
 	s       seeded
@@ -39,11 +42,16 @@ func newAPIEnv(t *testing.T) apiEnv {
 	e := setup(t)
 	s := seed(t, e)
 	tokens := auth.NewTokenIssuer(testJWTSecret)
-	requireAuth := auth.RequireAuth(tokens)
-	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app,
+	requireAuth := auth.RequireAuth(tokens, nil)
+	jobs := importer.NewJobManager()
+	// Registered after setup's cleanups, so it runs first: imports stop before the pool closes.
+	t.Cleanup(func() { _ = jobs.Shutdown(context.Background()) })
+	h := server.NewRouter(slog.New(slog.DiscardHandler), e.app, server.Options{},
 		contact.NewHandler(contact.NewService(contact.NewPostgresRepository(e.db)), requireAuth),
 		deal.NewHandler(deal.NewService(deal.NewPostgresRepository(e.db)), requireAuth),
-		dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(e.db)), requireAuth))
+		dashboard.NewHandler(dashboard.NewService(dashboard.NewPostgresRepository(e.db)), requireAuth),
+		importer.NewHandler(importer.NewService(importer.NewPostgresRepository(e.db), jobs, 4,
+			slog.New(slog.DiscardHandler)), requireAuth))
 	cookie := func(user, tenant uuid.UUID) *http.Cookie {
 		tok, _, err := tokens.Issue(auth.Principal{UserID: user, TenantID: tenant, Role: auth.RoleOwner}, time.Now())
 		require.NoError(t, err)

@@ -57,7 +57,15 @@ func (l *MemoryLimiter) Allow(_ context.Context, key string) (bool, error) {
 }
 
 // Fail implements LoginLimiter.
-func (l *MemoryLimiter) Fail(_ context.Context, key string) error {
+func (l *MemoryLimiter) Fail(ctx context.Context, key string) error {
+	_, err := l.Take(ctx, key)
+	return err
+}
+
+// Take consumes one token for key and reports whether one was available. It
+// implements httpx.Limiter, for limits that count every request rather than
+// only failures (NFR-SEC-02: 100 requests per minute per user).
+func (l *MemoryLimiter) Take(_ context.Context, key string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.sweep()
@@ -67,10 +75,11 @@ func (l *MemoryLimiter) Fail(_ context.Context, key string) error {
 		l.buckets[key] = b
 	}
 	l.refill(b)
-	if b.tokens >= 1 {
-		b.tokens--
+	if b.tokens < 1 {
+		return false, nil
 	}
-	return nil
+	b.tokens--
+	return true, nil
 }
 
 func (l *MemoryLimiter) refill(b *bucket) {

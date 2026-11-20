@@ -35,8 +35,15 @@ func CurrentPrincipal(c *gin.Context) (Principal, bool) {
 }
 
 // RequireAuth verifies the access_token cookie and stores the Principal in the
-// request context. Missing or invalid token: 401 (FR-AUTH-06).
-func RequireAuth(tokens *TokenIssuer) gin.HandlerFunc {
+// request context. Missing or invalid token: 401 (FR-AUTH-06). It then counts
+// the request against the caller's rate limit (NFR-SEC-02): over the limit is
+// 429. The limit is per user, so it can only be applied once the user is known.
+// A nil limiter disables the limit.
+func RequireAuth(tokens *TokenIssuer, limiter httpx.Limiter) gin.HandlerFunc {
+	limit := httpx.RateLimit(limiter, func(c *gin.Context) string {
+		p, _ := PrincipalFrom(c.Request.Context())
+		return "user:" + p.UserID.String()
+	})
 	return func(c *gin.Context) {
 		raw, err := c.Cookie(accessCookie)
 		if err != nil {
@@ -49,6 +56,6 @@ func RequireAuth(tokens *TokenIssuer) gin.HandlerFunc {
 			return
 		}
 		c.Request = c.Request.WithContext(WithPrincipal(c.Request.Context(), p))
-		c.Next()
+		limit(c) // calls c.Next() when allowed, aborts with 429 otherwise
 	}
 }

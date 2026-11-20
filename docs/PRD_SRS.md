@@ -296,8 +296,8 @@ ID dùng UUID v7 sinh trong Go (có thứ tự theo thời gian, tốt cho index
 | contacts | id, tenant\_id, full\_name, email (citext), phone, company, notes, owner\_id, created\_at, updated\_at, deleted\_at, search\_text (sinh sẵn) | Unique (tenant\_id, email) khi chưa xóa; owner cùng tenant (FK kép) |
 | deals | id, tenant\_id, contact\_id, title, amount, stage, expected\_close\_date, owner\_id, lost\_reason, version, closed\_at, created\_at, updated\_at, deleted\_at | CHECK stage hợp lệ, amount ≥ 0; `lost_reason` chỉ có khi `lost`, `closed_at` chỉ có khi `won`/`lost`; contact và owner cùng tenant (FK kép) |
 | deal\_stage\_history | id, tenant\_id, deal\_id, from\_stage, to\_stage, reason, changed\_by, changed\_at | Chỉ thêm, không sửa (`app_user` không có UPDATE/DELETE) |
-| import\_jobs | id, tenant\_id, created\_by, status, total\_rows, processed\_rows, success\_rows, error\_rows, created\_at, finished\_at |  |
-| import\_job\_errors | job\_id, tenant\_id, row\_number, reason |  |
+| import\_jobs | id, tenant\_id, created\_by, status (`pending`/`running`/`completed`/`failed`/`cancelled`), total\_rows, processed\_rows, success\_rows, error\_rows, failure\_reason, created\_at, finished\_at | RLS; tiến độ cập nhật theo lô, cùng transaction với dữ liệu |
+| import\_job\_errors | job\_id, tenant\_id, row\_number, reason | RLS; khóa chính (job\_id, row\_number); chỉ thêm, không sửa |
 
 Index quan trọng:
 
@@ -390,6 +390,12 @@ Các quyết định phát sinh khi triển khai; đã phản ánh vào các b�
 | 2026-11-13 | FR-DEAL-02, 03 | Thêm `reopen_reason` và cột `deal_stage_history.reason`; tạo deal ghi dòng lịch sử `NULL → lead`; thêm `GET /deals/{id}/history` | PRD yêu cầu lý do khi mở lại `lost`; lịch sử phải khớp trạng thái hiện tại và xem được qua API |
 | 2026-11-13 | FR-DEAL-06 (mới) | Xóa mềm deal, có optimistic locking | Không có cách gỡ deal tạo nhầm; deal nhầm còn mở thì cũng không xóa được khách hàng |
 | 2026-11-13 | FR-CON-01..04 | Contacts giữ nguyên CRUD: tạo, xem (chi tiết, danh sách, tìm kiếm), sửa một phần (PATCH), xóa mềm | Đã đủ, không thêm API |
+| 2026-11-17 | FR-IMP-01 | CSV bắt buộc có header; cột nhận theo tên (không phân biệt hoa thường): `full_name` (bắt buộc), `email`, `phone`, `company`, `notes`; cột lạ bị bỏ qua. Người import là owner của các contact | PRD chưa quy định định dạng file |
+| 2026-11-17 | FR-IMP-03 | `row_number` là số dòng thật trong file (header là dòng 1). Email trùng với contact đã có hoặc với dòng trước trong file là dòng lỗi `email already exists` (dòng đứng trước được nhập) | Người dùng mở file là tìm thấy dòng lỗi; trùng email phát hiện bằng `INSERT ... ON CONFLICT DO NOTHING` |
+| 2026-11-17 | FR-IMP-05, NFR-REL-01 | Thêm cột `import_jobs.failure_reason`. Hủy giữ lại các lô đã ghi; job thành `cancelled`. Khi tắt server: chờ job đang chạy tối đa 10 giây rồi hủy | Người dùng biết vì sao job dừng; không rollback cả file đã nhập dở |
+| 2026-11-17 | FR-SYS-03 | Seed tạo `owner@acme.demo` và `owner@beta.demo` (dữ liệu mẫu: 12 contact, 8 deal ở mọi stage), mật khẩu chung `SEED_OWNER_PASSWORD`; tùy chọn `-users N` (tài khoản `loadtest-NNN@acme.demo`) và `-contacts N` | Tài khoản dùng thử cố định, dễ nhớ; không có mật khẩu viết cứng |
+| 2026-11-17 | NFR-SEC-02, NFR-PERF-01 | Giới hạn 100 request/phút áp **theo user** trong middleware xác thực; load test dùng 200 tài khoản để 200 req/s vẫn dưới giới hạn | Đo hiệu năng khi rate limit vẫn bật như production |
+| 2026-11-17 | NFR-SEC-06, OWASP | Thêm: giới hạn đăng ký 10/giờ/IP, tối đa 2 import chạy cùng lúc mỗi tenant, `ReadTimeout`/`IdleTimeout` cho server, `govulncheck` trong CI. Swagger UI vẫn chỉ bật ở `APP_ENV=development` (không thêm giá trị `local`) | Kết quả rà soát `docs/security-review.md` |
 
 ## 6. Deploy miễn phí và CI/CD
 

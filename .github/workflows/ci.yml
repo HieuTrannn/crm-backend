@@ -20,6 +20,9 @@ jobs:
         with:
           # golangci-lint must be built with Go >= the go.mod version; pin once a compatible release is confirmed.
           version: latest
+      # Known vulnerabilities in dependencies or the standard library that our
+      # code can actually reach (OWASP API8: vulnerable components).
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   test:
     name: unit tests

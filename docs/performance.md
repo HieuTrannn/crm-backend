@@ -1,4 +1,8 @@
-# Hiệu năng truy vấn contacts (NFR-PERF-01, NFR-PERF-03)
+# Hiệu năng (NFR-PERF-01, 02, 03)
+
+Phần 1: truy vấn contacts. Phần 2: [import CSV 100.000 dòng](#import-csv-100000-dòng-nfr-perf-02). Phần 3: [load test k6](#load-test-api-đọc-nfr-perf-01).
+
+## Truy vấn contacts (NFR-PERF-01, NFR-PERF-03)
 
 Đo ngày 2026-11-13 trên PostgreSQL 17.11 (Docker, máy dev Windows). Số liệu dùng để so sánh
 các phương án, không đại diện cho production.
@@ -192,3 +196,108 @@ Tra `pg_proc`: chỉ `texteq` (`=` trên text) là leakproof. `textlike` (`LIKE`
 **Giới hạn đã biết.** Thời gian tìm kiếm tăng tuyến tính: ước tính ~180 ms với 1 triệu contact
 trong một tenant. Khi tới quy mô đó, cân nhắc phương án `SECURITY DEFINER` (nếu có superuser)
 hoặc một search engine riêng (PRD mục 8).
+
+## Import CSV 100.000 dòng (NFR-PERF-02)
+
+Đo ngày 2026-11-17 trên máy dev Windows, 12 CPU, PostgreSQL 17 chạy trong Docker Desktop (testcontainers).
+Benchmark gọi đúng `importer.Service` mà API dùng, ghi vào Postgres thật qua role `app_user` (có RLS).
+
+```bash
+go run ./cmd/gencsv -n 100000 -o contacts.csv     # file mẫu, 5% dòng lỗi cố ý
+IMPORT_HEAP_PROFILE=heap.pprof go test -tags=integration -run '^$' \
+  -bench BenchmarkImport100k -benchtime=1x ./test/integration/
+go tool pprof -sample_index=alloc_space -top heap.pprof
+```
+
+### Kết quả
+
+| Chỉ số | Kết quả (3 lần chạy) | Yêu cầu |
+| --- | --- | --- |
+| Thời gian 100.000 dòng (95.000 hợp lệ, 5.000 lỗi) | **14,7 s** (~6.800 dòng/giây) | < 30 s ✅ |
+| Heap Go đang dùng tăng thêm lúc cao nhất (`HeapInuse`) | **4,1–5,0 MB** | < 100 MB ✅ |
+| Bộ nhớ process lấy thêm từ OS (`Sys`) | **0,3–5,1 MB** | < 100 MB ✅ |
+| Validator (`IMPORT_WORKERS`) | 12 (= `runtime.NumCPU()`) | cấu hình được |
+
+Kết quả cuối khớp đúng dữ liệu: `total_rows = 100000`, `success_rows = 95000`, `error_rows = 5000`
+(gồm 1.250 email trùng, chỉ phát hiện được ở tầng DB qua `ON CONFLICT DO NOTHING`).
+
+### Thời gian đi đâu: CPU profile
+
+```
+Duration: 17.17s, Total samples = 17.49s
+      flat  flat%        cum   cum%
+    16.50s 94.34%     16.50s 94.34%  runtime.cgocall
+     0.01s 0.057%      0.28s  1.60%  importer.writeBatches
+     0.01s 0.057%      0.17s  0.97%  pgtype.(*encodePlanArrayCodecBinary).Encode
+         0     0%      0.23s  1.32%  sqlc.(*Queries).InsertImportedContacts
+```
+
+Trên Windows, mọi syscall mạng đi qua `runtime.cgocall`: **94% thời gian là chờ PostgreSQL trả lời**.
+Phần Go (đọc CSV, validate, mã hóa mảng gửi xuống) chỉ khoảng 0,3 giây. Mỗi lô 500 dòng mất ~70 ms phía
+DB: chèn 500 dòng vào `contacts`, mỗi dòng tính cột sinh sẵn `search_text` (gọi `unaccent`) và cập nhật
+4 index (khóa chính, `(tenant_id, id)`, email duy nhất, phân trang). Ngoài ra Postgres chạy trong máy ảo
+WSL2 của Docker Desktop, nên mỗi lần commit đều có thêm độ trễ I/O. Thêm validator sẽ không làm nhanh hơn:
+nút thắt là writer duy nhất và DB.
+
+### Bộ nhớ: heap profile
+
+```
+Type: alloc_space   (tổng cấp phát trong cả lần chạy, không phải lượng đang giữ)
+Showing nodes accounting for 177.74MB, 67.49% of 263.36MB total
+      flat  flat%        cum   cum%
+   38.50MB 14.62%    38.50MB 14.62%  encoding/csv.(*Reader).readRecord
+   23.95MB  9.09%    23.95MB  9.09%  pgproto3.(*Bind).Encode
+   22.88MB  8.69%   171.70MB 65.20%  importer.writeBatches
+   20.79MB  7.90%    20.79MB  7.90%  pgtype.encodePlanTextCodecString.Encode
+   12.60MB  4.78%   142.26MB 54.02%  importer.(*store).InsertContacts
+    8.00MB  3.04%    10.50MB  3.99%  net/mail.(*addrParser).parseAddress
+```
+
+Tổng cấp phát là 263 MB, nhưng heap đang dùng chỉ tăng ~5 MB. Lý do:
+
+- File được **stream**: upload chép thẳng xuống file tạm, `encoding/csv` đọc từng dòng, không bao giờ giữ cả file.
+- Bộ nhớ đang giữ bị chặn trên bởi thiết kế: 2 channel có buffer 500 phần tử, cộng một lô 500 dòng đang ghi.
+- Mọi dòng đã ghi xong là rác ngắn hạn, GC dọn liên tục. Muốn giảm tổng cấp phát (áp lực lên GC) thì có thể
+  đặt `csv.Reader.ReuseRecord = true`, nhưng khi đó phải chép record trước khi gửi qua channel. Hiện chưa cần.
+
+### Cách đọc số đo bộ nhớ của Go
+
+| Chỉ số | Ý nghĩa | Dùng để |
+| --- | --- | --- |
+| `HeapInuse` | Byte trong các span heap đang có object | Ước lượng RAM heap thật sự đang dùng |
+| `Sys` | Tổng bộ nhớ runtime đã xin từ OS (heap, stack, metadata) | Gần với RAM của process |
+| `alloc_space` (pprof) | Tổng byte **đã cấp phát** từ đầu, kể cả đã được GC dọn | Tìm chỗ tạo nhiều rác |
+| `inuse_space` (pprof) | Byte **đang giữ** tại thời điểm chụp | Tìm rò rỉ bộ nhớ |
+
+Đo "RAM tăng bao nhiêu" thì dùng `HeapInuse`/`Sys` lấy mẫu trong lúc chạy (benchmark lấy mẫu 20 ms/lần);
+`alloc_space` lớn không có nghĩa là tốn RAM, chỉ có nghĩa là GC phải làm việc nhiều.
+
+## Load test API đọc (NFR-PERF-01)
+
+Đo ngày 2026-11-17 bằng `make loadtest` (k6 0.54, mọi thành phần trong Docker Compose trên cùng máy dev,
+12 CPU). Dữ liệu: tenant Acme Demo với 100.000 contact; 200 tài khoản `loadtest-NNN@acme.demo`, mỗi VU
+của k6 dùng một tài khoản nên rate limit 100 request/phút/user vẫn bật.
+
+Kịch bản: tăng từ 10 lên 200 request/giây trong 60 giây, giữ 200 request/giây trong 60 giây. Request đọc
+chia đều cho 4 loại: danh sách contact (trang đầu, 20 dòng), tìm kiếm `q=nguyen`, xem một deal,
+dashboard pipeline.
+
+```
+✓ checks.........................: 100.00% 18299 out of 18299
+  http_req_duration..............: avg=3.46ms  med=1ms  p(90)=1.33ms  p(95)=1.48ms  p(99)=216.73ms  max=241.1ms
+  ✓ { kind:read }................: avg=1.04ms  med=1ms  p(90)=1.31ms  p(95)=1.43ms  p(99)=1.74ms    max=26ms
+  http_req_failed................: 0.00%   0 out of 18502
+  http_reqs......................: 18502   153.9/s (trung bình cả lần chạy, gồm 60 giây tăng dần; đỉnh 200/s)
+```
+
+| Chỉ số | Kết quả | Yêu cầu |
+| --- | --- | --- |
+| p(95) request đọc | **1,43 ms** | < 100 ms ✅ |
+| Tỷ lệ lỗi request đọc | **0%** (không có 429) | < 1% ✅ |
+| RAM container API sau khi chạy | 16 MB | — |
+
+- Dòng `http_req_duration` tổng có p(99) ~217 ms là **203 lần đăng nhập** (bcrypt cost 12, chậm có chủ đích),
+  được gắn tag `kind:login` và loại khỏi ngưỡng.
+- `q=nguyen` là từ phổ biến (~10% contact), nên Postgres đi theo index `created_at` và dừng sau 21 kết quả.
+  Tìm từ hiếm phải lọc cả tenant (~19 ms, xem phần EXPLAIN ở trên); kịch bản này chưa gồm trường hợp đó.
+- k6, API và PostgreSQL chạy chung một máy, nên số đo là cận trên của độ trễ phía server, không phải số production.

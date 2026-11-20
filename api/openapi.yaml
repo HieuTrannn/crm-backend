@@ -1,11 +1,21 @@
 openapi: 3.1.0
 info:
   title: Mini CRM API
-  version: 0.2.0
+  version: 1.0.0
   description: |
     Authentication uses two HttpOnly, SameSite=Lax cookies (Secure in production):
     `access_token` (JWT HS256, 15 minutes, Path=/api) and `refresh_token`
     (7 days, Path=/api/v1/auth, rotated on every refresh).
+
+    Limits: 100 requests per minute per authenticated user (429 `RATE_LIMITED`),
+    10 sign-ups per hour per IP, 5 failed logins per 15 minutes per IP and email,
+    JSON bodies up to 1 MB (larger is 400 `VALIDATION_ERROR`), CSV uploads up to 20 MB.
+
+    Every error has the shape `{"error": {"code", "message", "details"}, "request_id"}`.
+    Another tenant's resources answer 404, exactly like missing ones.
+servers:
+  - url: /
+    description: Same origin (the frontend proxies /api to the backend)
 tags:
   - name: System
     description: Health checks (outside /api/v1)
@@ -17,9 +27,13 @@ tags:
     description: Sales pipeline (FR-DEAL-01..05)
   - name: Dashboard
     description: Pipeline and monthly sales figures (FR-DASH-01, 02)
+  - name: Imports
+    description: Background CSV import of contacts (FR-IMP-01..05)
 paths:
   /healthz:
     get:
+      operationId: healthz
+      security: []  # public: no session cookie needed
       tags: [System]
       summary: Liveness probe
       responses:
@@ -31,6 +45,8 @@ paths:
                 $ref: "#/components/schemas/Status"
   /readyz:
     get:
+      operationId: readyz
+      security: []  # public: no session cookie needed
       tags: [System]
       summary: Readiness probe (database reachable)
       responses:
@@ -49,6 +65,8 @@ paths:
 
   /api/v1/auth/register:
     post:
+      operationId: register
+      security: []  # public: no session cookie needed
       tags: [Auth]
       summary: Create a tenant and its owner in one transaction (FR-AUTH-01)
       description: |
@@ -76,9 +94,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          description: RATE_LIMITED (more than 10 sign-ups per hour from this IP)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/auth/login:
     post:
+      operationId: login
+      security: []  # public: no session cookie needed
       tags: [Auth]
       summary: Log in and receive session cookies (FR-AUTH-03)
       requestBody:
@@ -114,6 +140,8 @@ paths:
 
   /api/v1/auth/refresh:
     post:
+      operationId: refreshSession
+      security: []  # public: no session cookie needed
       tags: [Auth]
       summary: Rotate the refresh token and issue a new access token (FR-AUTH-04)
       description: |
@@ -131,6 +159,8 @@ paths:
 
   /api/v1/auth/logout:
     post:
+      operationId: logout
+      security: []  # public: no session cookie needed
       tags: [Auth]
       summary: Revoke the session and clear cookies (FR-AUTH-05)
       responses:
@@ -139,6 +169,7 @@ paths:
 
   /api/v1/me:
     get:
+      operationId: getMe
       tags: [Auth]
       summary: Current user and tenant (FR-AUTH-06)
       security:
@@ -159,6 +190,7 @@ paths:
 
   /api/v1/contacts:
     get:
+      operationId: listContacts
       tags: [Contacts]
       summary: List contacts, newest first, with cursor pagination and search (FR-CON-02/03)
       security:
@@ -181,7 +213,10 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     post:
+      operationId: createContact
       tags: [Contacts]
       summary: Create a contact (FR-CON-01)
       security:
@@ -203,6 +238,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "409":
           description: EMAIL_TAKEN (another live contact of this tenant has the email)
           content:
@@ -219,6 +256,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getContact
       tags: [Contacts]
       summary: Get a contact (FR-CON-04)
       security:
@@ -232,9 +270,12 @@ paths:
                 $ref: "#/components/schemas/Contact"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
     patch:
+      operationId: updateContact
       tags: [Contacts]
       summary: Partially update a contact (FR-CON-04)
       description: Absent fields are unchanged; an empty string clears email, phone, company or notes.
@@ -257,6 +298,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -268,6 +311,7 @@ paths:
         "422":
           $ref: "#/components/responses/InvalidOwner"
     delete:
+      operationId: deleteContact
       tags: [Contacts]
       summary: Soft-delete a contact (FR-CON-04)
       security:
@@ -277,6 +321,8 @@ paths:
           description: Deleted (hidden from lists; its email can be reused)
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -288,6 +334,7 @@ paths:
 
   /api/v1/deals:
     get:
+      operationId: listDeals
       tags: [Deals]
       summary: List deals, newest first, with filters and cursor pagination (FR-DEAL-05)
       description: For a Kanban board, call once per stage with ?stage=.
@@ -316,7 +363,10 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     post:
+      operationId: createDeal
       tags: [Deals]
       summary: Create a deal in stage lead (FR-DEAL-01)
       security:
@@ -338,6 +388,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "422":
           description: INVALID_CONTACT (missing, deleted or another tenant's contact) or INVALID_OWNER
           content:
@@ -352,6 +404,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getDeal
       tags: [Deals]
       summary: Get a deal
       security:
@@ -365,9 +418,12 @@ paths:
                 $ref: "#/components/schemas/Deal"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
     patch:
+      operationId: updateDeal
       tags: [Deals]
       summary: Partially update a deal with optimistic locking (FR-DEAL-04)
       description: Send the version you last read. Absent fields are unchanged.
@@ -390,6 +446,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -398,6 +456,7 @@ paths:
           $ref: "#/components/responses/InvalidOwner"
 
     delete:
+      operationId: deleteDeal
       tags: [Deals]
       summary: Soft-delete a deal with optimistic locking (FR-DEAL-06)
       description: |
@@ -419,6 +478,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -431,6 +492,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     post:
+      operationId: transitionDeal
       tags: [Deals]
       summary: Move a deal to another stage (FR-DEAL-02/03/04)
       description: |
@@ -457,6 +519,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -475,6 +539,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getDealHistory
       tags: [Deals]
       summary: Stage history of a deal, oldest first (FR-DEAL-03)
       description: Not paginated; a deal gains one entry per stage change. The first entry (from_stage null) is the creation.
@@ -495,11 +560,14 @@ paths:
                       $ref: "#/components/schemas/HistoryEntry"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "404":
           $ref: "#/components/responses/NotFound"
 
   /api/v1/dashboard/pipeline:
     get:
+      operationId: getPipelineSummary
       tags: [Dashboard]
       summary: Number and total amount of live deals per stage (FR-DASH-01)
       description: Always returns the five stages in pipeline order; empty stages have zeros.
@@ -520,9 +588,12 @@ paths:
                       $ref: "#/components/schemas/StageSummary"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /api/v1/dashboard/monthly:
     get:
+      operationId: getMonthlySales
       tags: [Dashboard]
       summary: Won revenue and win rate for the last 6 months (FR-DASH-02)
       description: |
@@ -548,6 +619,156 @@ paths:
                       $ref: "#/components/schemas/MonthSummary"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/imports/contacts:
+    post:
+      operationId: importContacts
+      tags: [Imports]
+      summary: Upload a contacts CSV and import it in the background (FR-IMP-01)
+      description: |
+        Answers 202 at once with the new job; poll GET /imports/{id} for progress.
+        The file must be UTF-8 (a BOM is fine), at most 20 MB, with a header row.
+        Columns are matched by name, case-insensitively: full_name (required),
+        email, phone, company, notes; other columns are ignored. Invalid lines and
+        emails that already exist are skipped and listed in /imports/{id}/errors.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "202":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportJob"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          description: RATE_LIMITED, or TOO_MANY_IMPORTS when the tenant already runs 2 imports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: FILE_TOO_LARGE (over 20 MB)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: SHUTTING_DOWN (the server is restarting)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/imports/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getImport
+      tags: [Imports]
+      summary: Job status and progress (FR-IMP-04)
+      description: Progress is updated once per batch of 500 lines.
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportJob"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/imports/{id}/errors:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listImportErrors
+      tags: [Imports]
+      summary: Rejected lines, by line number (FR-IMP-03, 04)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImportRowError"
+                  next_cursor: { type: [string, "null"] }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/imports/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: cancelImport
+      tags: [Imports]
+      summary: Cancel a running import (FR-IMP-05)
+      description: Batches already stored are kept; the job ends as cancelled shortly after.
+      security:
+        - cookieAuth: []
+      responses:
+        "202":
+          description: Cancellation requested
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: JOB_NOT_RUNNING (already finished)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
 components:
   securitySchemes:
@@ -575,6 +796,12 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    RateLimited:
+      description: RATE_LIMITED (more than 100 requests per minute for this user, NFR-SEC-02)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Unauthenticated:
       description: UNAUTHENTICATED (missing or invalid access token)
       content:
@@ -696,7 +923,7 @@ components:
       description: Absent fields are unchanged; an empty string clears email, phone, company or notes.
       properties:
         full_name: { type: string, minLength: 1, maxLength: 200 }
-        email: { type: string, maxLength: 254, description: A valid email, or empty to clear }
+        email: { type: string, maxLength: 254, description: "A valid email, or empty to clear" }
         phone: { type: string, maxLength: 20 }
         company: { type: string, maxLength: 200 }
         notes: { type: string, maxLength: 5000 }
@@ -808,5 +1035,26 @@ components:
         month: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$", example: "2026-11" }
         won_count: { type: integer, format: int64 }
         lost_count: { type: integer, format: int64 }
-        won_amount: { type: integer, format: int64, description: Revenue of deals won that month, whole VND }
+        won_amount: { type: integer, format: int64, description: "Revenue of deals won that month, whole VND" }
         win_rate: { type: number, minimum: 0, maximum: 1, description: "won / (won + lost); 0 when nothing closed" }
+
+    ImportJob:
+      type: object
+      required: [id, status, total_rows, processed_rows, success_rows, error_rows, failure_reason, created_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, running, completed, failed, cancelled] }
+        total_rows: { type: integer, description: Data lines in the file (known once the job is running) }
+        processed_rows: { type: integer }
+        success_rows: { type: integer }
+        error_rows: { type: integer }
+        failure_reason: { type: [string, "null"], description: Why the job failed or was cancelled }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+
+    ImportRowError:
+      type: object
+      required: [row_number, reason]
+      properties:
+        row_number: { type: integer, description: Line in the file; the header is line 1 }
+        reason: { type: string, example: "email is not a valid address" }

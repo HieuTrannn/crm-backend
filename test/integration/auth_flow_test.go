@@ -30,7 +30,8 @@ func newAuthRouter(t *testing.T, e env) http.Handler {
 	svc, err := auth.NewService(auth.NewPostgresRepository(e.db, e.app), tokens,
 		auth.NewMemoryLimiter(5, 3*time.Minute), auth.BcryptCost)
 	require.NoError(t, err)
-	return server.NewRouter(slog.New(slog.DiscardHandler), e.app, auth.NewHandler(svc, tokens, false))
+	return server.NewRouter(slog.New(slog.DiscardHandler), e.app, server.Options{},
+		auth.NewHandler(svc, auth.RequireAuth(tokens, nil), nil, false))
 }
 
 func call(t *testing.T, h http.Handler, method, path string, body any, cookies ...*http.Cookie) *httptest.ResponseRecorder {
