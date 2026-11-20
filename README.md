@@ -124,13 +124,14 @@ curl localhost:8080/readyz    # {"status":"ok"}  database is reachable (503 othe
 | `make migrate-up` / `make migrate-down` | Apply all / roll back one migration |
 | `make sqlc` | Generate Go code from `db/queries` (runs sqlc in Docker) |
 | `go run ./cmd/gencsv -n 100000 -o contacts.csv` | Generate a contacts CSV for import tests (5% invalid rows on purpose) |
-| `make seed` | Create a demo tenant and its owner from the `SEED_OWNER_*` variables (idempotent); without make: `go run ./cmd/seed` |
+| `make seed` | Create the demo tenants `owner@acme.demo` and `owner@beta.demo` with sample data, password `SEED_OWNER_PASSWORD` (idempotent; `go run ./cmd/seed -users 200 -contacts 100000` adds load-test data) |
 | `make db-up` / `make db-down` | Start / stop PostgreSQL in Docker |
 
 ## Performance and security
 
 - [docs/performance.md](docs/performance.md): EXPLAIN ANALYZE at 100,000 contacts, CSV import benchmark, k6 results.
 - [docs/security-review.md](docs/security-review.md): OWASP API Security Top 10 review and fixes.
+
 ## API
 
 | Method | Path | Description |

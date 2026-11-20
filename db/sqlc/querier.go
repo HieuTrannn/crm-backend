@@ -69,6 +69,11 @@ type Querier interface {
 	// Same as ListContacts plus a substring match on search_text (already lower-cased and
 	// unaccented). query must be LIKE-escaped by the caller; SQL normalizes it the same way.
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]Contact, error)
+	// Used only by cmd/seed (local development and load tests).
+	// Bulk contacts for load tests in one statement. Emails are unique per n, so
+	// running the seed again inserts nothing new. created_at is spread over two
+	// years so cursor pages and dashboards look realistic.
+	SeedContacts(ctx context.Context, arg SeedContactsParams) (int64, error)
 	SoftDeleteContact(ctx context.Context, arg SoftDeleteContactParams) (int64, error)
 	// Soft delete with optimistic locking: no row when the version moved on or the
 	// deal is missing or already deleted. Stage history is kept.

@@ -36,7 +36,8 @@ db-up:
 db-down:
 	docker compose down
 
-# Creates a demo tenant and its owner from the SEED_OWNER_* variables in .env.
+# FR-SYS-03: two demo tenants with sample data. Accounts use SEED_OWNER_PASSWORD.
+# Load test data: go run ./cmd/seed -users 200 -contacts 100000
 # Safe to run again: an existing account is left untouched. Run migrate-up first.
 seed:
 	go run ./cmd/seed
